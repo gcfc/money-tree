@@ -7,6 +7,10 @@ from calendar import monthrange
 from stock_indicators import indicators
 from stock_indicators.indicators.common.quote import Quote
 from tqdm import tqdm
+import pandas as pd
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
+import plotly.express as px
 
 TICKER = "SPY"
 TICKER = TICKER.upper()
@@ -21,17 +25,17 @@ print(f"{TICKER}:")
 
 quotes = []
 for i in tqdm(range(len(data))):
-    quotes.append(Quote(date=data.index.to_pydatetime()[i], open=data['Open'][i], high=data['High'][i], low=data['Low'][i], close=data['Adj Close'][i], volume=data['Volume'][i]))
+    quotes.append(Quote(date=data.index.to_pydatetime()[i], open=data['Open'][i], high=data['High'][i], low=data['Low'][i], close=data['Close'][i], volume=data['Volume'][i]))
 
 #%% Indicators
 rsi_results = indicators.get_rsi(quotes)
 rsi = {result.date.date() : result.rsi for result in rsi_results}
 macd_results = indicators.get_macd(quotes)
 macd = {result.date.date() : result for result in macd_results}
-ema_9_results = indicators.get_ema(quotes, lookback_periods=9)
-ema_9 = {result.date.date() : result.ema for result in ema_9_results}
-sma_150 = indicators.get_sma(quotes, lookback_periods=200)
-sma_slope = np.diff(np.array([sma_150[i].sma - sma_150[i-1].sma for i in range(1, len(sma_150)) if sma_150[i-1].sma is not None]), 1)
+sma_200 = indicators.get_sma(quotes, lookback_periods=200)
+sma_200_slope = np.diff(np.array([sma_200[i].sma - sma_200[i-1].sma for i in range(1, len(sma_200)) if sma_200[i-1].sma is not None]))
+sma_500 = indicators.get_sma(quotes, lookback_periods=500)
+sma_500_slope = np.diff(np.array([sma_500[i].sma - sma_500[i-1].sma for i in range(1, len(sma_500)) if sma_500[i-1].sma is not None]))
 dates = list(map(lambda x: x.to_pydatetime().date(), data.index))
 prices_dict = {d : p for d, p in zip(dates, data['Adj Close'].tolist())}
 
@@ -46,7 +50,7 @@ money_in, daily_gains, curr_gains = 0, 0, 0
 max_shares, max_money_in = 0, 0
 
 while curr_date < end_date:
-    if curr_date in prices_dict.keys() and rsi[curr_date] and ema_9[curr_date] and macd[curr_date].macd and macd[curr_date].signal:
+    if curr_date in prices_dict.keys() and rsi[curr_date] and macd[curr_date].macd and macd[curr_date].signal:
         if prev_date is not None and in_trade: 
             daily_gains += curr_shares * (prices_dict[curr_date] - prices_dict[prev_date])
             curr_gains += daily_gains
@@ -120,6 +124,32 @@ plt.title("P&L")
 plt.tight_layout()
 plt.show()
 
+
+#%% Candlesticks
+
+# Create subplots and mention plot grid size
+fig = make_subplots(rows=2, cols=1, shared_xaxes=True, 
+               vertical_spacing=0.03, subplot_titles=('OHLC', 'Volume'), 
+               row_width=[0.2, 0.7])
+
+# Plot OHLC on 1st row
+fig.add_trace(go.Candlestick(x=data.index, open=data["Open"], high=data["High"],
+                low=data["Low"], close=data["Close"], name="OHLC"), 
+                row=1, col=1
+)
+
+fig.add_trace(go.Scatter(x=data.index, y=[100]*len(data.index)))
+
+# Bar trace for volumes on 2nd row without legend
+fig.add_trace(go.Bar(x=data.index, y=data['Volume'], showlegend=False), row=2, col=1)
+
+# Do not show OHLC's rangeslider plot 
+fig.update(layout_xaxis_rangeslider_visible=False)
+fig.update_yaxes(
+       autorange = True,
+       fixedrange= False
+   )
+fig.show()
 
 # %%
 # aapl = yf.Ticker("AAPL")
