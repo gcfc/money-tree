@@ -1,6 +1,8 @@
 import os
+import sys
 import datetime as dt
 import pandas as pd
+import numpy as np
 import yfinance as yf
 from pandas.tseries.offsets import BDay
 
@@ -10,8 +12,10 @@ MAX_NUM_YEARS = 50
 def _validate_args(ticker, interval, start, end):
     VALID_INTERVALS = {"1m","2m","5m","15m","30m","60m","90m","1h","4h","1d","5d","1wk","1mo","3mo"}
     assert interval in VALID_INTERVALS, f"Invalid interval: {interval}. Supported intervals: {VALID_INTERVALS}"
-    assert isinstance(start, dt.date), f"Invalid start date"
-    assert isinstance(end, dt.date), f"Invalid end date"
+    if start is not None:
+        assert isinstance(start, dt.date), f"Invalid start date"
+    if end is not None:
+        assert isinstance(end, dt.date), f"Invalid end date"
 
 def is_continuous(datetime_series, interval:str) -> bool: 
     # TODO: check out pandas-market-calendars
@@ -35,90 +39,81 @@ def read_pickle(pickle_filepath):
         return None
 
 def pickle_filepath(ticker, interval):
-    return os.path.join(os.getcwd(), "data", f"{ticker.upper()}_{interval.lower()}.pkl")
-
-def split_date_range_to_query(start_date, end_date, max_chunk_size):
-    if max_chunk_size is None:
-        return [(start_date, end_date)]
-    
-    # Convert to pandas Timestamps if they are not already
-    start = pd.Timestamp(start_date)
-    end = pd.Timestamp(end_date)
-    
-    # Initialize the list to hold the date ranges
-    date_ranges = []
-    
-    # Loop through the date range
-    current_start = start_date
-    while current_start <= end_date:
-        current_end = current_start + BDay(max_chunk_size)
-        
-        # Ensure the end date does not go beyond the overall end_date
-        if current_end > end_date:
-            current_end = end_date
-        
-        # Append the tuple of the current start and end date to the list
-        date_ranges.append((current_start.date(), current_end.date()))
-        
-        # Move to the next start date
-        current_start = current_end + BDay(1)
-    
-    return date_ranges
+    return os.path.join(sys.path[0], "data", f"{ticker.upper()}_{interval.lower()}.pkl")
 
 
-def update_from_yf(ticker, interval, start, end, df):
-    # Interval string to number of days
-    MAX_CHUNK_SIZE_DICT = {"1m": 7, 
-                           "2m": 7,
-                           "5m": 7,
-                           "15m": 7,
-                           "30m": 7,
-                           "1h": 730}
-    max_chunk_size = MAX_CHUNK_SIZE_DICT.get(interval)
-    
-    # For now assume data is downloaded by whole days
-    # TODO: remove this assumption and print a warning if there's missing timestamps
-    business_days = pd.bdate_range(str(start), str(end)) # (start.isoformat(), end.isoformat())
-    
-    # blob dates into max_chunk_size and download
-    # TODO: only download the missing dates, not all from start to end
-    queries_list = split_date_range_to_query(start, end, max_chunk_size)
-        
-    for query_start, query_end in queries_list:
-        # Call yf.download() by max chunks, join on "Datetime", and save to pkl file
-        data = yf.download(ticker, interval=interval, start=query_start, end=query_end, prepost=True)
-        df = pd.merge(df, data, on="Datetime", how="left") # TODO verify this
-        df.to_pickle(pickle_filepath(ticker, interval)) # TODO: verify this
+def update_from_yf(ticker, interval, start: dt.datetime, end:dt.datetime, df:pd.DataFrame):
+    '''
+    This function is expected to be called with all arguments defined, no arguments should equal to None. 
+    '''
+    # Call yf.download(), join on "Datetime", and save to pkl file
+    data = yf.download(ticker, interval=interval, start=start, end=end, prepost=True)
+    data = data.drop(['Adj Close'], axis=1)
+    try:
+        data.index = list(map(lambda x: dt.datetime.strptime(str(x).replace(":",""), '%Y-%m-%d %H%M%S%z').replace(tzinfo=None), data.index))
+    except:
+        try:
+            data.index = list(map(lambda x: dt.datetime.strptime(str(x).replace(":",""), '%Y-%m-%d %H%M%S').replace(tzinfo=None), data.index))
+        except Exception as e:
+            raise ValueError(e)
+    data = data.rename_axis("Datetime").reset_index()
+    df = df.merge(data, how="outer")
+    target_file = pickle_filepath(ticker, interval)
+    if not os.path.exists(target_file):
+        open(target_file, "x")
+    df.to_pickle(target_file)
+    df.to_csv(target_file.removesuffix('.pkl')+".csv") # TODO: this is just for debug, remove this
     return data
 
-        
-def get_ohlcv(ticker:str, interval:str, start:dt.date, end:dt.date):
+
+def get_historical_data(ticker:str, interval:str, start:dt.date = None, end:dt.date = None):
     '''
     Note: 4h is special, gotta download it from somewhere other than yf
     '''
     _validate_args(ticker, interval, start, end)
-    
+
     df = read_pickle(pickle_filepath(ticker, interval))
-    
-    # If pickle exists
-    if df is not None:
-        if start is None: 
+    # Make start and end valid
+    if start is None: 
+        if df is not None: # If pickle exists
             start = df['Datetime'].min()
-        if end is None: 
-            end = dt.date.today()
-        filtered_df = df[(df['Datetime'] >= start) & (df['Datetime'] <= end)]
+        else: # If pickle doesn't exist
+            start = dt.datetime(dt.date.today().year - MAX_NUM_YEARS, 1, 1)
+    if end is None: 
+        end = dt.datetime.today()
+    if type(start) == dt.date:
+        start = dt.datetime(start.year, start.month, start.day)
+    if type(end) == dt.date:
+        end = dt.datetime(end.year, end.month, end.day)
     
+    # Interval string to number of days
+    MAX_DAYS_DICT = {"1m": 7, 
+                    "2m": 7,
+                    "5m": 7,
+                    "15m": 7,
+                    "30m": 7,
+                    "1h": 730}
+    num_days = MAX_DAYS_DICT.get(interval, np.inf)
+    
+    # For now assume data is downloaded by whole days， i.e. whole day present or whole day missing
+    # TODO: remove this assumption and print a warning if there's missing timestamps
+    # business_days = pd.bdate_range(str(start), str(end)) # (start.isoformat(), end.isoformat())
+    
+    if (dt.datetime.today() - end).days > num_days:
+        raise ValueError(f"Cannot query {interval} data greater than {num_days} days!")
+    
+    if num_days != np.inf:
+        start = max(start, dt.datetime.today() - dt.timedelta(days=num_days-1))
+    
+    if df is not None: # If pickle exists     
+        filtered_df = df[(df['Datetime'] >= start) & (df['Datetime'] <= end)]
         if not is_continuous(filtered_df['Datetime'], interval):
             return update_from_yf(ticker, interval, start, end, df)
         else:
             return filtered_df
     
-    # If pickle doesn't exist
-    else:
-        if start is None: 
-            dt.date(dt.date.today().year - MAX_NUM_YEAR, 1, 1)
-        if end is None: 
-            end = dt.date.today()
+    else: # If pickle doesn't exist        
+        df = pd.DataFrame(columns=["Datetime", 'Open', 'High', 'Low', 'Close', 'Volume'])
         return update_from_yf(ticker, interval, start, end, df)
 
 
@@ -129,3 +124,9 @@ def overwrite_historic_data(ticker, interval, df):
     start = df['Datetime'].min()
     end = dt['Datetime'].max()
     return update_from_yf(ticker, interval, start, end, df)
+
+def update_all():
+    for interval in {"1m", "5m", "1h", "1d"}:
+        for ticker in {"QQQ", "SPY", "VOO", "NVDA", "MSFT"}:
+            get_historical_data(ticker, interval)
+            

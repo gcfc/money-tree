@@ -1,0 +1,4 @@
+bokeh
+yfinance
+pandas
+numpy
