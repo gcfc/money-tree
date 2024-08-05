@@ -49,16 +49,23 @@ def update_from_yf(ticker, interval, start: dt.datetime, end:dt.datetime, df:pd.
     # Call yf.download(), join on "Datetime", and save to pkl file
     data = yf.download(ticker, interval=interval, start=start, end=end, prepost=True)
     data = data.drop(['Adj Close'], axis=1)
-    data.index = list(map(lambda x: dt.datetime.strptime(str(x).replace(":",""), '%Y-%m-%d %H%M%S%z').replace(tzinfo=None), data.index))
+    try:
+        data.index = list(map(lambda x: dt.datetime.strptime(str(x).replace(":",""), '%Y-%m-%d %H%M%S%z').replace(tzinfo=None), data.index))
+    except:
+        try:
+            data.index = list(map(lambda x: dt.datetime.strptime(str(x).replace(":",""), '%Y-%m-%d %H%M%S').replace(tzinfo=None), data.index))
+        except Exception as e:
+            raise ValueError(e)
     data = data.rename_axis("Datetime").reset_index()
     df = df.merge(data, how="outer")
     target_file = pickle_filepath(ticker, interval)
     if not os.path.exists(target_file):
         open(target_file, "x")
     df.to_pickle(target_file)
+    df.to_csv(target_file.removesuffix('.pkl')+".csv") # TODO: this is just for debug, remove this
     return data
 
-        
+
 def get_historical_data(ticker:str, interval:str, start:dt.date = None, end:dt.date = None):
     '''
     Note: 4h is special, gotta download it from somewhere other than yf
@@ -66,7 +73,6 @@ def get_historical_data(ticker:str, interval:str, start:dt.date = None, end:dt.d
     _validate_args(ticker, interval, start, end)
 
     df = read_pickle(pickle_filepath(ticker, interval))
-    
     # Make start and end valid
     if start is None: 
         if df is not None: # If pickle exists
