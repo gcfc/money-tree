@@ -36,16 +36,16 @@ class SmaCross(Strategy):
                     for _, indicator in self.__dict__.items()
                     if isinstance(indicator, Indicator)}
 
-    def next(self):
+    def next(self, verbose=False):
         if self.crossover(self.ema9, self.sma50):
             self.buy(1)
 
-        elif self.crossover(self.sma50, self.ema9):
-            self.sell(1)
+        # elif self.crossover(self.sma50, self.ema9):
+        #     self.sell(1)
 
         super().next()
 
-data = get_historical_data("NVDA", "1m")
+data = get_historical_data("QQQ", "1d")
 broker = Broker(data)
 strategy = SmaCross(data, broker)
 
@@ -69,10 +69,12 @@ strategy = SmaCross(data, broker)
 
 # Skip first few candles where indicators are still "warming up"
 # +1 to have at least two entries available
+
 start = int(max((np.isnan(indicator.values.astype(float)).argmin(axis=-1).max()
                     for indicator in strategy.indicators), default=1))
 broker.set_index(start)
 strategy.set_index(start)
+verbose = True
 
 # This assumes decisions are made only at close of candle, and orders would always go thru at the open of next candle. 
 # This backtest simulation cannot make new trades in the middle of the candle, which makes sense due to 1. the lack of repainting data, 2. the general advice that traders should wait for a candle's close to make decisions. 
@@ -81,20 +83,24 @@ strategy.set_index(start)
 for i in range(start, len(data)):
     # update state machines and indicators
     # NOTE: The first tick of the for loop looks at index 1 for both strategy and broker
-    strategy.next()
+    strategy.next(verbose)
     
     try:
-        broker.next()
-    except OutOfMoneyError:
+        broker.next(verbose)
+    except OutOfMoneyError as e:
+        print(e)
         break
 
-# else:
-#     # Close any remaining open trades so they produce some stats
-#     for trade in broker.active_trades:
-#         trade.close()
-        
+else:
+    # TODO: make it a function, used in both OutOfMoneyError and here 
+    # Close any remaining open trades so they produce some stats
+    for _, trade in dict(broker.trades).items():
+        last_index = len(data) - 1 
+        broker.close_trade(trade, data.Close[last_index], last_index)
+    assert len(broker.trades) == 0
+    broker.cash = 0
 
 # compute equity and stats
-# visualize(data, broker, strategy)
+visualize(data, broker, strategy)
 
 # update_all()

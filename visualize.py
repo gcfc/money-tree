@@ -5,6 +5,11 @@ from bokeh.colors.named import (
     lime as BULL_COLOR,
     tomato as BEAR_COLOR
 )
+
+import bokeh.palettes
+
+dark_colors = bokeh.palettes.Dark2_8
+
 # from bokeh.io import show
 from bokeh.layouts import gridplot
 
@@ -31,9 +36,51 @@ def visualize(df: pd.DataFrame, broker: Broker, strategy: Strategy):
     ohlc_plot.grid.grid_line_alpha=0.3
     
     ohlc_plot.segment(df.Datetime, df.High, df.Datetime, df.Low, color="black")
-    ohlc_plot.vbar(df.Datetime[bull], candle_width, df.Open[bull], df.Close[bull], fill_color=BULL_COLOR, line_color="black")
-    ohlc_plot.vbar(df.Datetime[bear], candle_width, df.Open[bear], df.Close[bear], fill_color=BEAR_COLOR, line_color="black")
+    m1 = ohlc_plot.vbar(df.Datetime[bull], candle_width, df.Open[bull], df.Close[bull], fill_color=BULL_COLOR, line_color="black")
+    m2 = ohlc_plot.vbar(df.Datetime[bear], candle_width, df.Open[bear], df.Close[bear], fill_color=BEAR_COLOR, line_color="black")
     
+    
+    callback_hovertool_x = CustomJS(code="""
+    var tooltips = document.getElementsByClassName('bk-Tooltip');
+
+    tooltips[0].style.left = '5px';
+
+    """)
+    ohlc_plot.add_tools(HoverTool(
+        point_policy="follow_mouse",
+        mode='vline',
+        renderers=[m1, m2],
+        tooltips="""
+        <div>
+            <span style="font-size: 16px; color: black;">$y{0,0.00}</span>
+        </div>
+        """,
+        callback=callback_hovertool_x,
+
+    ))
+
+    callback_hovertool_y = CustomJS(code="""
+        var tooltips = document.getElementsByClassName('bk-Tooltip');
+
+        tooltips[1].style.top = '480px';
+
+    """)
+    ohlc_plot.add_tools(HoverTool(
+        point_policy="follow_mouse",
+        mode='vline',
+        renderers=[m1, m2],
+        tooltips="""
+        <div>
+            <span style="font-size: 16px; color: black;">$x</span>
+        </div>
+        """,
+        formatters={
+            '$x' : 'datetime'
+        },
+        callback=callback_hovertool_y,
+    ))
+
+
     # Volume plot
     vol_plot = figure(x_axis_type="datetime", width = 1200, height = 200, tools=TOOLS, title = "Volume", x_range=ohlc_plot.x_range, y_range=(0, max(df.Volume[-INIT_CANDLES:])*(1+MARGIN_MULTIPLIER_VOL)))
 
@@ -46,15 +93,29 @@ def visualize(df: pd.DataFrame, broker: Broker, strategy: Strategy):
     
     
     # Plot Indicators
-    for indicator in strategy.indicators:
+    for ix, indicator in enumerate(strategy.indicators):
         if indicator.overlay:
-            ohlc_plot.line(x=df.Datetime, y = indicator.values)
-    
+            ohlc_plot.line(x=df.Datetime, y=indicator.values, line_color=dark_colors[ix], legend_label=indicator.name)
+        else:
+            pass # TODO: implement RSI, MACD etc separate graphs 
+        
+        
     # Plot Trades
     # TODO: only debug for now, need to implement for real
-    # ohlc_plot.scatter(np.array([df.Datetime[trade] for trade in broker.closed_trades]), np.array([df.Close[trade] for trade in broker.closed_trades]), size=10)
+    # Entry points
+    entry_t, entry_prices = [], []
+    for trade in broker.closed_trades:
+        entry_t.extend(df.Datetime[trade.entry_indices])
+        entry_prices.extend(trade.entry_prices)
+    ohlc_plot.scatter(np.array(entry_t), np.array(entry_prices), size=10, marker="triangle")
     
-    
+    # Exit points
+    exit_t, exit_prices = [], []
+    for trade in broker.closed_trades:
+        exit_t.extend(df.Datetime[trade.exit_indices])
+        exit_prices.extend(trade.exit_prices)
+    ohlc_plot.scatter(np.array(exit_t), np.array(exit_prices), size=10, marker="inverted_triangle")
+   
     # Display
     plots = [ohlc_plot, vol_plot]
     

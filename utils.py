@@ -10,8 +10,7 @@ class OutOfMoneyError(Exception):
 class Indicator:
     def __init__(self, func, *args, overlay = False) -> None:
         self.overlay = overlay
-        
-        self.name = "Indicator " + getattr(func, '__name__', func.__class__.__name__) + f"({', '.join([str(arg) for arg in args if not isinstance(arg, (pd.Series))])})"
+        self.name = getattr(func, '__name__', func.__class__.__name__) + f"({', '.join([str(arg) for arg in args if not isinstance(arg, (pd.Series))])})"
         
         try:
             self.values = func(*args)
@@ -21,7 +20,7 @@ class Indicator:
     def __repr__(self) -> str:
         return self.name
 
-# Receives commands from Broker, modify Broker's order queue?
+# Receives commands from Broker, modify Broker's order queue
 
 # If SL / TP are specified in orders, Trade class is the one that coordinates
 # the corresponding order to close.
@@ -29,10 +28,13 @@ class Trade:
     def __init__(self, broker, num_shares, entry_price, entry_index, comment: str = None) -> None:
         self.broker = broker
         self.num_shares = num_shares
-        self.entry_price = entry_price
-        self.entry_index = entry_index
-        self.exit_price = None
-        self.exit_index = None
+        self.entry_prices = [entry_price]
+        self.entry_indices = [entry_index]
+        self.entry_shares_hist = [num_shares]
+        
+        self.exit_prices = []
+        self.exit_indices = []
+        self.exit_shares_hist = []
         self.comment = comment
         self.stop_loss_order = None
         self.take_profit_order = None
@@ -40,19 +42,25 @@ class Trade:
         self.pnl = 0
         self.pnl_history = []
 
-    def replace(self, **kwargs):
-        for k, v in kwargs.items():
-            setattr(self, f'_{self.__class__.__qualname__}__{k}', v)
-        return self
+    def __repr__(self):
+        return f'<Trade size={self.num_shares} time={self.broker.data.Datetime[self.entry_indices[0]]}-{self.broker.data.Datetime[self.exit_indices[-1]] if self.exit_indices else ""} ' \
+               f'avg_cost={self.avg_cost:.2f}-{self.exit_prices[-1] if self.exit_prices else ""} pnl={self.pnl:.2f}' \
+               f'{" comment="+(self.comment if self.comment is not None else "")}>'
     
     def update_pnl(self):
-        price = self.exit_price or self.broker.last_price()
-        self.pnl = self.num_shares * (price - self.entry_price)
+        # TODO : Unit test this.
+        in_trade = self.num_shares * self.broker.last_price()
+        sell_price = sum(price * shares for price, shares in zip(self.exit_prices, self.exit_shares_hist))
+        buy_price = sum(price * shares for price, shares in zip(self.entry_prices, self.entry_shares_hist)) 
+        sgn = copysign(1, self.num_shares)
+        self.pnl = sgn * (in_trade + sell_price - buy_price)
+        return self.pnl
     
     def pnl_percentage(self):
-        price = self.exit_price or self.broker.last_price()
+        # TODO: fix this math
+        price = self.broker.last_price() # or exit price
         sgn = copysign(1, self.num_shares)
-        return sgn * (price - self.entry_price) / self.entry_price
+        return sgn * (price - self.avg_cost) / self.avg_cost
 
 # So far only support market order and limit orders. Stop loss orders are simulated as limit orders at specified price. 
 class Order:
@@ -84,7 +92,7 @@ class Broker:
         self.data = data
         self.order_queue: List[Order] = []
         self.trades: Dict[Union[str, None], Trade] = dict()
-        self.closed_trades = []
+        self.closed_trades: List[Trade] = []
         # trade_on_close = True means market orders are executed on the previous candle close. 
         # False means market orders are executed on the current candle's open. Defaults to False. 
         self.trade_on_close = trade_on_close
@@ -92,7 +100,7 @@ class Broker:
         self.equity = 0
         self.equity_history = []
         
-    def next(self):
+    def next(self, verbose=False):
         # Scan order queue and fill any orders based on new candlestick, results in Trades added to self.trades
         candle = self.data.iloc[self._i]
         curr_open, curr_high, curr_low, curr_close = candle.Open, candle.High, candle.Low, candle.Close
@@ -163,21 +171,27 @@ class Broker:
                     
             self.order_queue.remove(order)
 
-            # Handle cash and equity changes, raise OutOfMoneyError if equity < 0
-            for _, trade in self.trades.items():
-                trade.pnl = (self.last_price() - trade.entry_price) * trade.num_shares
-                trade.pnl_history.append(trade.pnl)
-            self.equity = self.cash + sum(trade.pnl for trade in self.trades.values())
-            self.equity_history.append(self.equity)
-            if self.equity <= 0:
-                for _, trade in dict(self.trades).items():
-                    self.close_trade(trade, curr_close, self._i)
-                assert len(self.trades) == 0
-                self.cash = 0
-                raise OutOfMoneyError
+        # Handle cash and equity changes, raise OutOfMoneyError if equity < 0
+        for _, trade in self.trades.items():
+            trade.update_pnl()
+            trade.pnl_history.append(trade.pnl)
+        self.equity = self.cash + sum(trade.pnl for trade in self.trades.values())
+        self.equity_history.append(self.equity)
+        if self.equity <= 0:
+            for _, trade in dict(self.trades).items():
+                self.close_trade(trade, curr_close, self._i)
+            assert len(self.trades) == 0
+            self.cash = 0
+            return OutOfMoneyError("Out of money! Stopping simulation...")
+        
+        if verbose:
+            print("Time:\t", self.data.Datetime[self._i], "Last price:", round(self.last_price(), 2))
+            print("Open trades:\t", self.trades)
+            print("Close trades:\t", self.closed_trades)
+            print()
 
         self._i += 1
-
+        
     def new_order(self, num_shares, limit_price = None, stop_price = None, stop_loss = None, take_profit = None, parent_trade = None, comment = None):
         # Only support whole number shares at the moment
         assert num_shares == round(num_shares), f"Share size {num_shares} must be whole number."
@@ -220,11 +234,19 @@ class Broker:
         # This function cannot reverse the direction of the original trade. 
         # Must explicitly place another order.         
         resultant_size = trade.num_shares + new_shares
-        assert resultant_size * trade.num_shares >= 0, "Illegal operation, trade direction reversed!"
+        assert resultant_size * trade.num_shares > 0, "Illegal operation, trade direction reversed!"
         if resultant_size == 0: 
             self.close_trade(trade, price, time_index)
         else:
-            trade.avg_cost = (trade.avg_cost * trade.num_shares + price * new_shares) / resultant_size
+            if trade.num_shares * new_shares > 0: # Adding to the original direction of trade
+                trade.entry_prices.append(price)
+                trade.entry_indices.append(time_index)
+                trade.entry_shares_hist.append(new_shares)
+                trade.avg_cost = (trade.avg_cost * trade.num_shares + price * new_shares) / resultant_size
+            else:
+                trade.exit_prices.append(price)
+                trade.exit_indices.append(time_index)
+                trade.exit_shares_hist.append(new_shares)
             trade.num_shares += new_shares
             # If originally a long trade, adjust the cash
             # If originally a short trade, "borrowed shares" are not cash, and covering does not change the cash, for simplicity. 
@@ -232,16 +254,21 @@ class Broker:
                 self.cash -= price * new_shares 
     
     def close_trade(self, trade: Trade, price: float, time_index: int):
-        self.trades.pop(trade.comment)
+        trade = self.trades.pop(trade.comment)
+        trade.exit_prices.append(price)
+        trade.exit_indices.append(time_index)
+        trade.exit_shares_hist.append(trade.num_shares)
         if trade.stop_loss_order:
             self.orders.remove(trade.stop_loss_order)
         if trade.take_profit_order:
             self.orders.remove(trade.take_profit_order)
 
-        self.closed_trades.append(trade.replace(exit_price=price, exit_index=time_index))
+        self.closed_trades.append(trade)
         self.cash += trade.pnl
 
     def open_trade(self, num_shares, price, time_index, comment, stop_loss, take_profit):
+        # TODO: handle all this in the ctor of Trade class? 
+        
         new_trade = Trade(self, num_shares, price, time_index, comment)
         self.trades[comment] = new_trade
         
@@ -267,7 +294,7 @@ class Strategy:
         self.broker = broker
         self.indicators = set()
     
-    def next(self):
+    def next(self, verbose=False):
         self._i += 1
         
     def set_index(self, new_index):
