@@ -15,41 +15,22 @@ from bokeh.layouts import gridplot
 
 from math import pi
 from bokeh.plotting import figure, show
+from bokeh.transform import factor_cmap
 
 from utils import *
 
-def visualize(df: pd.DataFrame, broker: Broker, strategy: Strategy):
-    TOOLS = "pan,wheel_zoom,box_zoom,reset,save"
-    INIT_CANDLES = 100
-    MARGIN_MULTIPLIER_OHLC = 0.03
-    MARGIN_MULTIPLIER_VOL = 0.1
-    
-    bull = df.Close >= df.Open
-    bear = df.Close < df.Open
-    candle_width = np.min(np.diff(df.Datetime)/2)
-    
-    # OHLC plot
-    # Initially display the most recent INIT_CANDLES candles
-    start_ind = len(df) - INIT_CANDLES
-    ohlc_plot = figure(x_axis_type="datetime", width = 1200, height = 600, tools=TOOLS, title = "Candlesticks", x_range = (df.Datetime[start_ind], df.Datetime[len(df)-1]), y_range = (min(df.Low[start_ind:])*(1-MARGIN_MULTIPLIER_OHLC), max(df.High[start_ind:])*(1+MARGIN_MULTIPLIER_OHLC)))
-    ohlc_plot.xaxis.major_label_orientation = pi/4
-    ohlc_plot.grid.grid_line_alpha=0.3
-    
-    ohlc_plot.segment(df.Datetime, df.High, df.Datetime, df.Low, color="black")
-    m1 = ohlc_plot.vbar(df.Datetime[bull], candle_width, df.Open[bull], df.Close[bull], fill_color=BULL_COLOR, line_color="black")
-    m2 = ohlc_plot.vbar(df.Datetime[bear], candle_width, df.Open[bear], df.Close[bear], fill_color=BEAR_COLOR, line_color="black")
-    
-    
+def add_crosshair_labels(plot, renderer):
+    # https://github.com/bokeh/bokeh/issues/3000#issuecomment-2028617843
+    # https://docs.bokeh.org/en/2.4.3/docs/user_guide/tools.html#crosshairtool
+    # https://docs.bokeh.org/en/2.4.3/docs/reference/models/formatters.html#bokeh.models.DatetimeTickFormatter
     callback_hovertool_x = CustomJS(code="""
-    var tooltips = document.getElementsByClassName('bk-Tooltip');
-
-    tooltips[0].style.left = '5px';
-
+        var tooltips = document.getElementsByClassName('bk-Tooltip');
+        tooltips[0].style.left = '5px';
     """)
-    ohlc_plot.add_tools(HoverTool(
+    plot.add_tools(HoverTool(
         point_policy="follow_mouse",
+        renderers=[renderer],
         mode='vline',
-        renderers=[m1, m2],
         tooltips="""
         <div>
             <span style="font-size: 16px; color: black;">$y{0,0.00}</span>
@@ -61,36 +42,93 @@ def visualize(df: pd.DataFrame, broker: Broker, strategy: Strategy):
 
     callback_hovertool_y = CustomJS(code="""
         var tooltips = document.getElementsByClassName('bk-Tooltip');
-
         tooltips[1].style.top = '480px';
-
     """)
-    ohlc_plot.add_tools(HoverTool(
+    plot.add_tools(HoverTool(
         point_policy="follow_mouse",
+        renderers=[renderer],
         mode='vline',
-        renderers=[m1, m2],
         tooltips="""
         <div>
-            <span style="font-size: 16px; color: black;">$x</span>
+            <span style="font-size: 16px; color: black;">@Datetime{%Y-%m-%d %T}</span>
         </div>
         """,
-        formatters={
-            '$x' : 'datetime'
+        formatters= {
+            "@Datetime" : "datetime"
         },
         callback=callback_hovertool_y,
     ))
 
+def visualize(df: pd.DataFrame, broker: Broker, strategy: Strategy):
+    TOOLS = "pan,wheel_zoom,box_zoom,reset,save"
+    INIT_CANDLES = 100
+    MARGIN_MULTIPLIER_OHLC = 0.03
+    MARGIN_MULTIPLIER_VOL = 0.1
 
+    candle_width = np.min(np.diff(df.Datetime)/2)
+    source = ColumnDataSource(df)
+    source.add((df.Close >= df.Open).values.astype(np.uint8).astype(str), 'inc')
+    
+    # TODO: Fix gaps on non-business days
+    # OHLC plot
+    # Initially display the most recent INIT_CANDLES candles
+    start_ind = len(df) - INIT_CANDLES
+    ohlc_plot = figure(
+        x_axis_type="datetime", 
+        width = 1200, 
+        height = 600, 
+        tools=TOOLS, 
+        title = "Candlesticks", 
+        x_range = (df.Datetime[start_ind], df.Datetime[len(df)-1]), 
+        y_range = (min(df.Low[start_ind:])*(1-MARGIN_MULTIPLIER_OHLC), max(df.High[start_ind:])*(1+MARGIN_MULTIPLIER_OHLC))
+    )
+    ohlc_plot.xaxis.major_label_orientation = pi/4
+    ohlc_plot.grid.grid_line_alpha=0.3
+    
+    ohlc_plot.segment("Datetime", "High", "Datetime", "Low", source=source, color="black")
+    m_ohlc = ohlc_plot.vbar("Datetime", candle_width, "Open", "Close", source=source, line_color="black",
+                   fill_color=factor_cmap('inc', [BEAR_COLOR, BULL_COLOR], ['0', '1']))
+
+    # NBSP = '\N{NBSP}' * 4
+    # ohlc_tooltips = [
+    #     ("Datetime", "@Datetime{%Y-%m-%d}"),
+    #     ('OHLC', NBSP.join(('@Open{0,0.00}',
+    #                         '@High{0,0.00}',
+    #                         '@Low{0,0.00}',
+    #                         '@Close{0,0.00}'))),
+    #     ('Volume', '@Volume{0,0}')]
+
+    # ohlc_plot.add_tools(HoverTool(
+    #     point_policy="follow_mouse",
+    #     mode='vline',
+    #     renderers=[m_ohlc],
+    #     tooltips=ohlc_tooltips,
+    #     formatters={
+    #         '@Datetime' : 'datetime'
+    #     }
+    # ))
+    
+    add_crosshair_labels(ohlc_plot, m_ohlc)
+    
     # Volume plot
-    vol_plot = figure(x_axis_type="datetime", width = 1200, height = 200, tools=TOOLS, title = "Volume", x_range=ohlc_plot.x_range, y_range=(0, max(df.Volume[-INIT_CANDLES:])*(1+MARGIN_MULTIPLIER_VOL)))
+    vol_plot = figure(
+        x_axis_type="datetime", 
+        width = 1200, 
+        height = 200, 
+        tools=TOOLS, 
+        title = "Volume", 
+        x_range=ohlc_plot.x_range, 
+        y_range=(0, max(df.Volume[-INIT_CANDLES:])*(1+MARGIN_MULTIPLIER_VOL))
+    )
 
     vol_plot.xaxis.major_label_orientation = pi/4
     vol_plot.grid.grid_line_alpha=0.3
 
-    vol_plot.segment(df.Datetime, df.High, df.Datetime, df.Low, color="black")
-    vol_plot.vbar(df.Datetime[bull], candle_width, df.Volume[bull], fill_color=BULL_COLOR, line_color="black")
-    vol_plot.vbar(df.Datetime[bear], candle_width, df.Volume[bear],fill_color=BEAR_COLOR, line_color="black")
+    vol_plot.segment("Datetime", "High", "Datetime", "Low", source=source, color="black")
+    m_vol = vol_plot.vbar("Datetime", candle_width, "Volume", source=source, line_color="black",
+                   fill_color=factor_cmap('inc', [BEAR_COLOR, BULL_COLOR], ['0', '1']))
     
+    add_crosshair_labels(vol_plot, m_vol)
     
     # Plot Indicators
     for ix, indicator in enumerate(strategy.indicators):
@@ -101,20 +139,21 @@ def visualize(df: pd.DataFrame, broker: Broker, strategy: Strategy):
         
         
     # Plot Trades
-    # TODO: only debug for now, need to implement for real
-    # Entry points
-    entry_t, entry_prices = [], []
+    buy_t, buy_prices = [], []
+    sell_t, sell_prices = [], []
     for trade in broker.closed_trades:
-        entry_t.extend(df.Datetime[trade.entry_indices])
-        entry_prices.extend(trade.entry_prices)
-    ohlc_plot.scatter(np.array(entry_t), np.array(entry_prices), size=10, marker="triangle")
-    
-    # Exit points
-    exit_t, exit_prices = [], []
-    for trade in broker.closed_trades:
-        exit_t.extend(df.Datetime[trade.exit_indices])
-        exit_prices.extend(trade.exit_prices)
-    ohlc_plot.scatter(np.array(exit_t), np.array(exit_prices), size=10, marker="inverted_triangle")
+        if trade.num_shares > 0: # Long trades
+            buy_t.extend(df.Datetime[trade.entry_indices])
+            buy_prices.extend(trade.entry_prices)
+            sell_t.extend(df.Datetime[trade.exit_indices])
+            sell_prices.extend(trade.exit_prices)
+        else: # Short trades
+            sell_t.extend(df.Datetime[trade.entry_indices])
+            sell_prices.extend(trade.entry_prices)
+            buy_t.extend(df.Datetime[trade.exit_indices])
+            buy_prices.extend(trade.exit_prices)
+    ohlc_plot.scatter(np.array(buy_t), np.array(buy_prices), size=10, marker="triangle")
+    ohlc_plot.scatter(np.array(sell_t), np.array(sell_prices), size=10, marker="inverted_triangle")
    
     # Display
     plots = [ohlc_plot, vol_plot]

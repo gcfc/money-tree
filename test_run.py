@@ -32,21 +32,21 @@ class SmaCross(Strategy):
         self.ema9 = Indicator(EMA, self.data.Close, 9, overlay=True)
         
         # all indicators used in strategy
-        self.indicators = {indicator
+        self.indicators = [indicator
                     for _, indicator in self.__dict__.items()
-                    if isinstance(indicator, Indicator)}
+                    if isinstance(indicator, Indicator)]
 
-    def next(self, verbose=False):
+    def next(self):
         if self.crossover(self.ema9, self.sma50):
             self.buy(1)
 
-        # elif self.crossover(self.sma50, self.ema9):
-        #     self.sell(1)
+        elif self.crossover(self.sma50, self.ema9):
+            self.sell(1)
 
         super().next()
 
 data = get_historical_data("QQQ", "1d")
-broker = Broker(data)
+broker = Broker(data, verbose=True)
 strategy = SmaCross(data, broker)
 
 
@@ -74,7 +74,6 @@ start = int(max((np.isnan(indicator.values.astype(float)).argmin(axis=-1).max()
                     for indicator in strategy.indicators), default=1))
 broker.set_index(start)
 strategy.set_index(start)
-verbose = True
 
 # This assumes decisions are made only at close of candle, and orders would always go thru at the open of next candle. 
 # This backtest simulation cannot make new trades in the middle of the candle, which makes sense due to 1. the lack of repainting data, 2. the general advice that traders should wait for a candle's close to make decisions. 
@@ -83,10 +82,10 @@ verbose = True
 for i in range(start, len(data)):
     # update state machines and indicators
     # NOTE: The first tick of the for loop looks at index 1 for both strategy and broker
-    strategy.next(verbose)
+    strategy.next()
     
     try:
-        broker.next(verbose)
+        broker.next()
     except OutOfMoneyError as e:
         print(e)
         break
