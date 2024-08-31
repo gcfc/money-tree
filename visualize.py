@@ -69,7 +69,8 @@ def visualize(df: pd.DataFrame, broker: Broker, strategy: Strategy):
     source = ColumnDataSource(df)
     source.add((df.Close >= df.Open).values.astype(np.uint8).astype(str), 'inc')
     
-    # TODO: Fix gaps on non-business days
+    # TODO: Fix gaps on non-business days and hours
+    # TODO: if sub-day chart, shade in background of after and pre-market candles
     # OHLC plot
     # Initially display the most recent INIT_CANDLES candles
     start_ind = len(df) - INIT_CANDLES

@@ -45,7 +45,7 @@ class SmaCross(Strategy):
 
         super().next()
 
-data = get_historical_data("QQQ", "1d")
+data = get_historical_data("NIO", "1m")
 broker = Broker(data, verbose=True)
 strategy = SmaCross(data, broker)
 
@@ -79,27 +79,30 @@ strategy.set_index(start)
 # This backtest simulation cannot make new trades in the middle of the candle, which makes sense due to 1. the lack of repainting data, 2. the general advice that traders should wait for a candle's close to make decisions. 
 # An exception is that, it is assumed that stop loss orders and take profit orders go thru immediately, even in the middle of a candle. While this ignores the effects of bid-ask spreads and broker execution delays, a backtesting simulation like this one cannot accurately quantify these implications. 
 
-for i in range(start, len(data)):
-    # update state machines and indicators
-    # NOTE: The first tick of the for loop looks at index 1 for both strategy and broker
-    strategy.next()
-    
-    try:
-        broker.next()
-    except OutOfMoneyError as e:
-        print(e)
-        break
+run = True
+if run:
+    for i in range(start, len(data)):
+        # update state machines and indicators
+        # NOTE: The first tick of the for loop looks at index 1 for both strategy and broker
+        strategy.next()
+        
+        try:
+            broker.next()
+        except OutOfMoneyError as e:
+            print(e)
+            break
 
-else:
-    # TODO: make it a function, used in both OutOfMoneyError and here 
-    # Close any remaining open trades so they produce some stats
-    for _, trade in dict(broker.trades).items():
-        last_index = len(data) - 1 
-        broker.close_trade(trade, data.Close[last_index], last_index)
-    assert len(broker.trades) == 0
-    broker.cash = 0
+    else:
+        # TODO: make it a function, used in both OutOfMoneyError and here 
+        # Close any remaining open trades so they produce some stats
+        for _, trade in dict(broker.trades).items():
+            last_index = len(data) - 1 
+            broker.close_trade(trade, data.Close[last_index], last_index)
+        assert len(broker.trades) == 0
+        broker.cash = 0
 
-# compute equity and stats
-visualize(data, broker, strategy)
+    # compute equity and stats
+    visualize(data, broker, strategy)
+
 
 # update_all()
