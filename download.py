@@ -8,6 +8,7 @@ from pandas.tseries.offsets import BDay
 
 
 MAX_NUM_YEARS = 50
+BASE_DIR = "C:\\Users\\georg\\GitHub\\money-tree\\"
 
 def _validate_args(ticker, interval, start, end):
     VALID_INTERVALS = {"1m","2m","5m","15m","30m","60m","90m","1h","4h","1d","5d","1wk","1mo","3mo"}
@@ -39,10 +40,10 @@ def read_pickle(pickle_filepath):
         return None
 
 def pickle_filepath(ticker, interval):
-    return os.path.join(sys.path[0], "data", f"{ticker.upper()}_{interval.lower()}.pkl")
+    return os.path.join(BASE_DIR, "data", f"{ticker.upper()}_{interval.lower()}.pkl")
 
 
-def update_from_yf(ticker, interval, start: dt.datetime, end:dt.datetime, df:pd.DataFrame):
+def update_from_yf(ticker, interval, start: dt.datetime = None, end:dt.datetime = None, df:pd.DataFrame = pd.DataFrame(columns=["Datetime", 'Open', 'High', 'Low', 'Close', 'Volume'])):
     '''
     This function is expected to be called with all arguments defined, no arguments should equal to None. 
     '''
@@ -62,7 +63,6 @@ def update_from_yf(ticker, interval, start: dt.datetime, end:dt.datetime, df:pd.
     if not os.path.exists(target_file):
         open(target_file, "x")
     df.to_pickle(target_file)
-    df.to_csv(target_file.removesuffix('.pkl')+".csv") # TODO: this is just for debug, remove this
     return data
 
 
@@ -129,4 +129,3 @@ def update_all():
     for interval in {"1m", "5m", "1h", "1d"}:
         for ticker in {"QQQ", "SPY", "VOO", "NVDA", "MSFT"}:
             get_historical_data(ticker, interval)
-            

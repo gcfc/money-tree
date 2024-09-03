@@ -59,7 +59,7 @@ def add_crosshair_labels(plot, renderer):
         callback=callback_hovertool_y,
     ))
 
-def visualize(df: pd.DataFrame, broker: Broker, strategy: Strategy):
+def visualize(df: pd.DataFrame, broker: Broker = None, strategy: Strategy = None):
     TOOLS = "pan,wheel_zoom,box_zoom,reset,save"
     INIT_CANDLES = 100
     MARGIN_MULTIPLIER_OHLC = 0.03
@@ -131,36 +131,38 @@ def visualize(df: pd.DataFrame, broker: Broker, strategy: Strategy):
     
     add_crosshair_labels(vol_plot, m_vol)
     
-    # Plot Indicators
-    for ix, indicator in enumerate(strategy.indicators):
-        if indicator.overlay:
-            ohlc_plot.line(x=df.Datetime, y=indicator.values, line_color=dark_colors[ix], legend_label=indicator.name)
-        else:
-            pass # TODO: implement RSI, MACD etc separate graphs 
-        
-        
-    # Plot Trades
-    buy_t, buy_prices = [], []
-    sell_t, sell_prices = [], []
-    for trade in broker.closed_trades:
-        if trade.num_shares > 0: # Long trades
-            buy_t.extend(df.Datetime[trade.entry_indices])
-            buy_prices.extend(trade.entry_prices)
-            sell_t.extend(df.Datetime[trade.exit_indices])
-            sell_prices.extend(trade.exit_prices)
-        else: # Short trades
-            sell_t.extend(df.Datetime[trade.entry_indices])
-            sell_prices.extend(trade.entry_prices)
-            buy_t.extend(df.Datetime[trade.exit_indices])
-            buy_prices.extend(trade.exit_prices)
-    ohlc_plot.scatter(np.array(buy_t), np.array(buy_prices), size=10, marker="triangle")
-    ohlc_plot.scatter(np.array(sell_t), np.array(sell_prices), size=10, marker="inverted_triangle")
+    if broker is not None and strategy is not None: 
+        # Plot Indicators
+        for ix, indicator in enumerate(strategy.indicators):
+            if indicator.overlay:
+                ohlc_plot.line(x=df.Datetime, y=indicator.values, line_color=dark_colors[ix], legend_label=indicator.name)
+            else:
+                pass # TODO: implement RSI, MACD etc separate graphs 
+            
+            
+        # Plot Trades
+        buy_t, buy_prices = [], []
+        sell_t, sell_prices = [], []
+        for trade in broker.closed_trades:
+            if trade.num_shares > 0: # Long trades
+                buy_t.extend(df.Datetime[trade.entry_indices])
+                buy_prices.extend(trade.entry_prices)
+                sell_t.extend(df.Datetime[trade.exit_indices])
+                sell_prices.extend(trade.exit_prices)
+            else: # Short trades
+                sell_t.extend(df.Datetime[trade.entry_indices])
+                sell_prices.extend(trade.entry_prices)
+                buy_t.extend(df.Datetime[trade.exit_indices])
+                buy_prices.extend(trade.exit_prices)
+        ohlc_plot.scatter(np.array(buy_t), np.array(buy_prices), size=10, marker="triangle")
+        ohlc_plot.scatter(np.array(sell_t), np.array(sell_prices), size=10, marker="inverted_triangle")
    
     # Display
     plots = [ohlc_plot, vol_plot]
     
     for p in plots:
         p.add_tools(CrosshairTool(dimensions='both'))
+        p.toolbar.active_scroll = p.select_one(WheelZoomTool)
     
     fig = gridplot(
         plots,
