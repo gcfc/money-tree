@@ -2,3 +2,5 @@ bokeh
 yfinance
 pandas
 numpy
+tradingview_screener
+pandas-market-calendars

@@ -5,9 +5,11 @@ import pandas as pd
 import numpy as np
 import yfinance as yf
 from pandas.tseries.offsets import BDay
+from typing import *
 
 
 MAX_NUM_YEARS = 50
+BASE_DIR = sys.path[0]
 
 def _validate_args(ticker, interval, start, end):
     VALID_INTERVALS = {"1m","2m","5m","15m","30m","60m","90m","1h","4h","1d","5d","1wk","1mo","3mo"}
@@ -39,10 +41,10 @@ def read_pickle(pickle_filepath):
         return None
 
 def pickle_filepath(ticker, interval):
-    return os.path.join(sys.path[0], "data", f"{ticker.upper()}_{interval.lower()}.pkl")
+    return os.path.join(BASE_DIR, "data", f"{ticker.upper()}_{interval.lower()}.pkl")
 
 
-def update_from_yf(ticker, interval, start: dt.datetime, end:dt.datetime, df:pd.DataFrame):
+def download_from_yf(ticker, interval, start: dt.datetime, end:dt.datetime, df:pd.DataFrame):
     '''
     This function is expected to be called with all arguments defined, no arguments should equal to None. 
     '''
@@ -57,17 +59,21 @@ def update_from_yf(ticker, interval, start: dt.datetime, end:dt.datetime, df:pd.
         except Exception as e:
             raise ValueError(e)
     data = data.rename_axis("Datetime").reset_index()
+    
+    
     df = df.merge(data, how="outer")
     target_file = pickle_filepath(ticker, interval)
     if not os.path.exists(target_file):
         open(target_file, "x")
     df.to_pickle(target_file)
-    df.to_csv(target_file.removesuffix('.pkl')+".csv") # TODO: this is just for debug, remove this
     return data
 
 
-def get_historical_data(ticker:str, interval:str, start:dt.date = None, end:dt.date = None):
+def get_historical_data(ticker:str, interval:str, start:Union[dt.date, None] = None, end:Union[dt.date, None] = None):
     '''
+    The public interface to get historical data from any time at any intervals.
+    This function fuses together many sources to produce a cleaned-up pandas DataFrame 
+    with all the data.
     Note: 4h is special, gotta download it from somewhere other than yf
     '''
     _validate_args(ticker, interval, start, end)
@@ -81,9 +87,9 @@ def get_historical_data(ticker:str, interval:str, start:dt.date = None, end:dt.d
             start = dt.datetime(dt.date.today().year - MAX_NUM_YEARS, 1, 1)
     if end is None: 
         end = dt.datetime.today()
-    if type(start) == dt.date:
+    if type(start) is dt.date:
         start = dt.datetime(start.year, start.month, start.day)
-    if type(end) == dt.date:
+    if type(end) is dt.date:
         end = dt.datetime(end.year, end.month, end.day)
     
     # Interval string to number of days
@@ -108,13 +114,13 @@ def get_historical_data(ticker:str, interval:str, start:dt.date = None, end:dt.d
     if df is not None: # If pickle exists     
         filtered_df = df[(df['Datetime'] >= start) & (df['Datetime'] <= end)]
         if not is_continuous(filtered_df['Datetime'], interval):
-            return update_from_yf(ticker, interval, start, end, df)
+            return download_from_yf(ticker, interval, start, end, df)
         else:
             return filtered_df
     
     else: # If pickle doesn't exist        
         df = pd.DataFrame(columns=["Datetime", 'Open', 'High', 'Low', 'Close', 'Volume'])
-        return update_from_yf(ticker, interval, start, end, df)
+        return download_from_yf(ticker, interval, start, end, df)
 
 
 # in case there's stock split or something that overwrites the entire history, or in case something goes wrong
@@ -123,10 +129,9 @@ def overwrite_historic_data(ticker, interval, df):
         raise RuntimeError("No data to overwrite!")
     start = df['Datetime'].min()
     end = dt['Datetime'].max()
-    return update_from_yf(ticker, interval, start, end, df)
+    return download_from_yf(ticker, interval, start, end, df)
 
 def update_all():
     for interval in {"1m", "5m", "1h", "1d"}:
         for ticker in {"QQQ", "SPY", "VOO", "NVDA", "MSFT"}:
             get_historical_data(ticker, interval)
-            
