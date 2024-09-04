@@ -6,13 +6,14 @@ import time
 import pickle
 import os
 from download import *
+import sys
 
 market_schedule = mcal.get_calendar('NYSE').schedule(start_date='2024-01-01', end_date='2024-12-31')
 regular_business_days = market_schedule.loc[market_schedule['market_close'].dt.time >= pd.to_datetime('20:00:00').time()].index.to_list()
 REGULAR_BUSINESS_DAYS = [i.to_pydatetime().date() for i in regular_business_days]
 ONE_DAY_IN_SECS = 86400
 OBSERVATION_TIME = 2 # days after making top gainer list
-BASE_DIR = "C:\\Users\\georg\\GitHub\\money-tree\\"
+BASE_DIR = sys.path[0]
 
 # This pickle is a dictionary of date to df of premarket top gainers every day. 
 PREMARKET_TOP_GAINERS_PICKLE = os.path.join(BASE_DIR, "data", "premarket_top_gainers.pkl")
@@ -119,7 +120,7 @@ if __name__ == '__main__':
         date_today = dt.datetime.now().date()
         if date_today in REGULAR_BUSINESS_DAYS:
             business_day_index = REGULAR_BUSINESS_DAYS.index(date_today)
-            if True: # dt.datetime.now().hour >= 14 and job_last_ran.date() != date_today:
+            if dt.datetime.now().hour >= 14 and job_last_ran != date_today:
                 premarket_top_gainers_job()
                 daily_top_gainers_job()
                 job_last_ran = dt.datetime.now().date()
