@@ -1,15 +1,13 @@
 from tradingview_screener import *
-import pandas as pd
 import datetime as dt
 import time
 import pickle
 import os
 from download import *
-import sys
+from tqdm import tqdm
 
-THREE_HOURS_IN_SECS = 10800
+ONE_HOUR_IN_SECS = 3600
 OBSERVATION_TIME = 2 # days after making top gainer list
-BASE_DIR = sys.path[0]
 
 # This pickle is a dictionary of date to df of premarket top gainers every day. 
 PREMARKET_TOP_GAINERS_PICKLE = os.path.join(BASE_DIR, "data", "premarket_top_gainers.pkl")
@@ -64,10 +62,13 @@ def premarket_top_gainers_job():
     PREMARKET_TOP_GAINERS[date_today] = df
     with open(PREMARKET_TOP_GAINERS_PICKLE, 'wb') as f:
         pickle.dump(PREMARKET_TOP_GAINERS, f)
-    print(f"{date_today}: Found premarket top gainers", df.name.to_list())
+    print(f"{date_today}: Found today's premarket top gainers", df.name.to_list())
     
     # Download 1m, 5m, 15m, 30m, 1h of all
-    # Move everything to gdrive & incorporate upload here, instead of in github
+    for ticker in tqdm(df.name.to_list()):
+        for interval in ["1m", "5m", "15m", "30m", "1h"]:
+            get_historical_data(ticker, interval, date_today, date_today)
+    print(f"{date_today}: Premarket top gainers download complete!")
 
 # What happens to daily top gainers in a few days?
 def daily_top_gainers_job():
@@ -96,7 +97,7 @@ def daily_top_gainers_job():
         })
     df = df[df.ticker.str.contains("NASDAQ:") | df.ticker.str.contains("NYSE:")]
     
-    DAILY_TOP_GAINERS[dt.datetime.now().date()] = df
+    DAILY_TOP_GAINERS[date_today] = df
     with open(DAILY_TOP_GAINERS_PICKLE, 'wb') as f:
         pickle.dump(DAILY_TOP_GAINERS, f)
 
@@ -107,13 +108,21 @@ def daily_top_gainers_job():
             stocks_to_download.update(DAILY_TOP_GAINERS[lookback_date].name)
         else:
             print("Skipped downloading daily top gainers on", lookback_date)
-    print("Downloading data for recent daily top gainers:", stocks_to_download)
+    print(f"{date_today}: Found recent daily top gainers:", stocks_to_download)
+    
     # Download 1m, 5m, 15m, 30m, 1h, 4h, 1d of all
-    # Move everything to gdrive & incorporate upload here, instead of in github
+    for ticker in tqdm(stocks_to_download):
+        for interval in ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]:
+            get_historical_data(ticker, interval, date_today, date_today)
+    print(f"{date_today}: Daily top gainers download complete!")
 
 if __name__ == '__main__':
+    
+    test_mode = False
+    test_date = dt.date(2024, 9, 10)
+    
     while True:
-        date_today = dt.date.today()
+        date_today = dt.date.today() if not test_mode else test_date
         if 1 <= date_today.month < 12 and BUSINESS_DAYS_UPDATED:
             BUSINESS_DAYS_UPDATED = False
         if date_today.month == 12 and date_today.day > 25 and not BUSINESS_DAYS_UPDATED:
@@ -121,12 +130,14 @@ if __name__ == '__main__':
         
         if date_today in FULL_BUSINESS_DAYS:
             business_day_index = FULL_BUSINESS_DAYS.index(date_today)
-            if dt.datetime.now().hour >= 14 and job_last_ran != date_today:
+            # All jobs are meant to be run after market close. 
+            if (dt.datetime.now().hour >= 21 and job_last_ran != date_today) or test_mode:
                 premarket_top_gainers_job()
                 daily_top_gainers_job()
-                update_big_names_data()
+                if not test_mode:
+                    update_big_names_data()
                 job_last_ran = dt.date.today()
                 print(f"{date_today}: Finished all jobs of today!")
         
         print(f"{dt.datetime.now()}: Sleeping...")
-        time.sleep(THREE_HOURS_IN_SECS)
+        time.sleep(ONE_HOUR_IN_SECS)

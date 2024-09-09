@@ -5,3 +5,4 @@ numpy
 tradingview_screener
 pandas-market-calendars
 python-dotenv
+tqdm
