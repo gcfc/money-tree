@@ -7,9 +7,11 @@ import yfinance as yf
 from pandas.tseries.offsets import BDay
 from typing import *
 import requests
+import time
+from bisect import bisect_left
+import pandas_market_calendars as mcal
 from dotenv import load_dotenv
 load_dotenv()
-
 
 BEGINNING_OF_TIME = dt.date(1960, 1, 1)
 BASE_DIR = sys.path[0]
@@ -37,6 +39,21 @@ MAX_DAYS_DICT_YF = {"1m": 7,
                     "1h": 730}
 MAX_DAYS_DICT_POLYGON = {interval : 730 for interval in VALID_INTERVALS}
 
+FULL_BUSINESS_DAYS = None
+BUSINESS_DAYS_UPDATED = False
+
+def update_business_days_array():
+    global FULL_BUSINESS_DAYS, BUSINESS_DAYS_UPDATED
+    last_year_start = dt.date(dt.date.today().year - 1, 1, 1)
+    next_year_end = dt.date(dt.date.today().year + 1, 12, 31)
+    market_schedule = mcal.get_calendar('NYSE').schedule(start_date=str(last_year_start), end_date=str(next_year_end))
+    business_days_list = market_schedule.loc[market_schedule['market_close'].dt.time >= pd.to_datetime('20:00:00').time()].index.to_list()
+    FULL_BUSINESS_DAYS = [i.to_pydatetime().date() for i in business_days_list]
+    BUSINESS_DAYS_UPDATED = True
+    print("Business days loaded!")
+
+update_business_days_array()
+
 def _validate_args(ticker, interval, start, end):
     assert interval in VALID_INTERVALS, f"Invalid interval: {interval}. Supported intervals: {VALID_INTERVALS}"
     if start is not None:
@@ -58,7 +75,6 @@ def is_continuous(datetime_series, interval:str) -> bool:
         raise NotImplementedError("not yet support this") # TODO
     return False
 
-        
 def read_pickle(pickle_filepath):
     if os.path.exists(pickle_filepath):
         return pd.read_pickle(pickle_filepath)
@@ -68,12 +84,33 @@ def read_pickle(pickle_filepath):
 def pickle_filepath(ticker, interval):
     return os.path.join(BASE_DIR, "data", f"{ticker.upper()}_{interval.lower()}.pkl")
 
+def most_recent_business_day(query_date = dt.date.today()):
+    ind = bisect_left(FULL_BUSINESS_DAYS, query_date)
+    return query_date if (query_date == FULL_BUSINESS_DAYS[ind]) else FULL_BUSINESS_DAYS[ind-1]
 
 def download_from_yf(ticker, interval, start: dt.date, end:dt.date):
     '''
     This function is expected to be called with all arguments defined, no arguments should equal to None.
     Downloads data from yfinance and returns a cleaned-up pandas DataFrame.  
     '''
+    # Modify start and end to valid range
+    # TODO: extract this section from two functions and merge into its own function? 
+    max_days_yf = MAX_DAYS_DICT_YF.get(interval, np.inf)
+    if start is None: 
+        start = BEGINNING_OF_TIME
+    if end is None: 
+        end = dt.date.today()
+
+    if max_days_yf != np.inf:
+        start = max(start, dt.date.today() - dt.timedelta(days=max_days_yf-1))
+    
+    if (dt.date.today() - end).days > max_days_yf:
+        raise ValueError(f"Cannot query {interval} data greater than {max_days_yf} days!")
+
+    # At this point start and end date must be specified (i.e. not None)
+    assert end > start, "Start date must be earlier than end date!"
+    
+    # Download and clean
     data = yf.download(ticker, interval=interval, start=start, end=end, prepost=True, progress=False)
     data = data.drop(['Adj Close'], axis=1)
     try:
@@ -91,19 +128,49 @@ def download_from_polygon(ticker, interval, start: dt.date, end:dt.date):
     This function is expected to be called with all arguments defined, no arguments should equal to None.
     Downloads data from polygon and returns a cleaned-up pandas DataFrame.  
     '''
+    # Modify start and end to valid range
+    # TODO: extract this section from two functions and merge into its own function? 
+    max_days_polygon = MAX_DAYS_DICT_POLYGON.get(interval, np.inf)
+    if start is None: 
+        start = BEGINNING_OF_TIME
+    if end is None: 
+        end = dt.date.today()
+
+    if max_days_polygon != np.inf:
+        start = max(start, dt.date.today() - dt.timedelta(days=max_days_polygon-1))
+    
+    if (dt.date.today() - end).days > max_days_polygon:
+        raise ValueError(f"Cannot query {interval} data greater than {max_days_polygon} days!")
+
+    # At this point start and end date must be specified (i.e. not None)
+    assert end > start, "Start date must be earlier than end date!"
+    
+    # Download and clean
     interval_abbrev_dict = {"m": "minute", "h": "hour", "d": "day"}
     interval_arg = interval[:-1] + "/" + interval_abbrev_dict[interval[-1]]
     
-    polygon_url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{interval_arg}/{start.isoformat()}/{end.isoformat()}?adjusted=true&sort=asc&limit=50000&apiKey={os.environ['POLYGON_API_KEY']}"
-    r = requests.get(polygon_url)
-    if not (r.json() and "results" in r.json() and "status" in r.json() and r.json()["status"] == "OK"):
-        raise RuntimeError(f"Polygon JSON Error! {r.json()}")
-    results = r.json()['results']
-    df = pd.json_normalize(results)
-    df.t = pd.Series.apply(df.t, lambda x: dt.datetime.fromtimestamp(x*1E-3).astimezone(dt.timezone(dt.timedelta(hours=-4))).replace(tzinfo=None))
-    df = df.rename(columns={"t":"Datetime", "o": "Open", "h":"High", "l":"Low",  "c": "Close", "v": "Volume"})
-    df = df.drop(['vw', 'n'], axis=1)
-    return df
+    df_end_date = start
+    total_df = None
+    while df_end_date < most_recent_business_day(end):
+        polygon_url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{interval_arg}/{start.isoformat()}/{end.isoformat()}?adjusted=true&sort=asc&limit=50000&apiKey={os.environ['POLYGON_API_KEY']}"
+        r = requests.get(polygon_url)
+        if not (r.json() and "results" in r.json()):
+            raise RuntimeError(f"Polygon JSON Error! {r.json()}")
+        results = r.json()['results']
+        df = pd.json_normalize(results)
+        df.t = pd.Series.apply(df.t, lambda x: dt.datetime.fromtimestamp(x*1E-3).astimezone(dt.timezone(dt.timedelta(hours=-4))).replace(tzinfo=None))
+        total_df = pd.concat([total_df, df], ignore_index=True)
+        df_end_date = total_df.t.iloc[len(total_df)-1].date()
+        start = df_end_date + dt.timedelta(days=1)
+        if df_end_date < most_recent_business_day(end):
+            print(f"{dt.datetime.now()}: Sleeping to stay under limit...")
+            time.sleep(12.5) # Obey limit of 5 API calls per minute
+        
+    
+    total_df = total_df.rename(columns={"t":"Datetime", "o": "Open", "h":"High", "l":"Low",  "c": "Close", "v": "Volume"})
+    total_df = total_df.drop(['vw', 'n'], axis=1)
+    print("download polygon success")
+    return total_df
 
 def get_historical_data(ticker:str, 
                         interval:str, 
@@ -117,51 +184,28 @@ def get_historical_data(ticker:str,
     '''
     _validate_args(ticker, interval, start, end)
 
-    max_days_yf = MAX_DAYS_DICT_YF.get(interval, np.inf)
-    max_days_polygon = MAX_DAYS_DICT_POLYGON.get(interval, np.inf)
-    max_days = max(max_days_yf, max_days_polygon)
-    
-    # Make start and end valid
-    if start is None: 
-        start = BEGINNING_OF_TIME
-    if end is None: 
-        end = dt.date.today()
-
-    if max_days != np.inf:
-        start = max(start, dt.date.today() - dt.timedelta(days=max_days-1))
-    
-    if (dt.date.today() - end).days > max_days:
-        raise ValueError(f"Cannot query {interval} data greater than {max_days} days!")
-
-    # At this point start and end date must be specified (i.e. not None)
-    assert end > start, "Start date must be earlier than end date!"
-        
-    # For now assume data is downloaded by whole days， i.e. whole day present or whole day missing
+    # TODO: check existing data and either 1. modify start and end or 2. don't download at all. For now assume data is downloaded by whole days， i.e. whole day present or whole day missing
     # TODO: remove this assumption and print a warning if there's missing timestamps
     # business_days = pd.bdate_range(str(start), str(end)) # (start.isoformat(), end.isoformat())
     
     new_data = None
     if interval == "1d":
         new_data = download_from_yf(ticker, interval, start, end)
-    elif interval == "4h":
+    elif interval in {"4h", "1h"}:
         new_data = download_from_polygon(ticker, interval, start, end)
     else:
         # Fuse the two together. During pre- and post- market hours, yfinance has better time granularity but no volume data, whereas Polygon has sparse timestamps each with volume data. 
-        # TODO: test call doesn't work df = get_historical_data("EBS", "1m")
+        
         new_data_yf = download_from_yf(ticker, interval, start, end)
         new_data_polygon = download_from_polygon(ticker, interval, start, end)
+        print("polygon datetime", new_data_polygon.Datetime)
         
-        pre_post_data = new_data_polygon.loc[(new_data_polygon['Datetime'].dt.time <= MARKET_OPEN) | (new_data_polygon['Datetime'].dt.time >= MARKET_CLOSE)]
-
-        # TODO: Lookup not by exact value, but by the closest timestamp in new_data_yf after the query timestamp. Polygon and yfinance have almost the exact timestamps so it doesn't quite matter for a prototype. 
+        # pre_post_data = new_data_yf.loc[(new_data_yf['Datetime'].dt.time <= MARKET_OPEN) | (new_data_yf['Datetime'].dt.time >= MARKET_CLOSE)]
         
-        # Populate pre- post- market volume
-        for _, row in pre_post_data.iterrows():
-            yf_row = new_data_yf[new_data_yf['Datetime'] == row.Datetime]
-            assert len(yf_row) <= 1, "Multiple of the same timestamps found."
-            new_data_yf.loc[yf_row.index, 'Volume'] = row.Volume
-        
-        new_data = new_data_yf
+        # Fill in finer-grain timestamps from YF. Polygon data takes precedence, hence the order in the list.
+        new_data = pd.concat([new_data_polygon, new_data_yf], axis=0)
+        new_data = new_data.drop_duplicates("Datetime").sort_values(by="Datetime")
+        # Stitched data kinda makes sense as an appoximation of pre- and post- market blips with volume readings. Polygon and yfinance have almost the exact timestamps so it doesn't quite matter for a prototype. 
 
     if not save_to_pickle:
         return new_data
@@ -196,7 +240,7 @@ def overwrite_historic_data(ticker, interval, df):
     end = dt['Datetime'].max()
     return download_from_yf(ticker, interval, start, end, df)
 
-def update_all():
-    for interval in {"1m", "5m", "1h", "1d"}:
+def update_big_names_data():
+    for interval in VALID_INTERVALS:
         for ticker in {"QQQ", "SPY", "VOO", "NVDA", "MSFT"}:
             get_historical_data(ticker, interval)
