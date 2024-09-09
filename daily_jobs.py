@@ -1,26 +1,22 @@
 from tradingview_screener import *
 import pandas as pd
 import datetime as dt
-import pandas_market_calendars as mcal
 import time
 import pickle
 import os
 from download import *
 import sys
 
-market_schedule = mcal.get_calendar('NYSE').schedule(start_date='2024-01-01', end_date='2024-12-31')
-regular_business_days = market_schedule.loc[market_schedule['market_close'].dt.time >= pd.to_datetime('20:00:00').time()].index.to_list()
-REGULAR_BUSINESS_DAYS = [i.to_pydatetime().date() for i in regular_business_days]
-ONE_DAY_IN_SECS = 86400
+THREE_HOURS_IN_SECS = 10800
 OBSERVATION_TIME = 2 # days after making top gainer list
 BASE_DIR = sys.path[0]
 
 # This pickle is a dictionary of date to df of premarket top gainers every day. 
 PREMARKET_TOP_GAINERS_PICKLE = os.path.join(BASE_DIR, "data", "premarket_top_gainers.pkl")
-PREMAREKT_TOP_GAINERS = dict()
+PREMARKET_TOP_GAINERS = dict()
 if os.path.exists(PREMARKET_TOP_GAINERS_PICKLE):
     with open(PREMARKET_TOP_GAINERS_PICKLE, 'rb') as f:
-        PREMAREKT_TOP_GAINERS = pickle.load(f)
+        PREMARKET_TOP_GAINERS = pickle.load(f)
 else:
     open(PREMARKET_TOP_GAINERS_PICKLE, "x")
 
@@ -65,9 +61,9 @@ def premarket_top_gainers_job():
         "float_shares_outstanding": "Float (M)"
         })
 
-    PREMAREKT_TOP_GAINERS[date_today] = df
+    PREMARKET_TOP_GAINERS[date_today] = df
     with open(PREMARKET_TOP_GAINERS_PICKLE, 'wb') as f:
-        pickle.dump(PREMAREKT_TOP_GAINERS, f)
+        pickle.dump(PREMARKET_TOP_GAINERS, f)
     print(f"{date_today}: Found premarket top gainers", df.name.to_list())
     
     # Download 1m, 5m, 15m, 30m, 1h of all
@@ -106,7 +102,7 @@ def daily_top_gainers_job():
 
     stocks_to_download = set()
     for day_delta in range(OBSERVATION_TIME + 1):
-        lookback_date = REGULAR_BUSINESS_DAYS[business_day_index - day_delta]
+        lookback_date = FULL_BUSINESS_DAYS[business_day_index - day_delta]
         if lookback_date in DAILY_TOP_GAINERS:
             stocks_to_download.update(DAILY_TOP_GAINERS[lookback_date].name)
         else:
@@ -117,13 +113,20 @@ def daily_top_gainers_job():
 
 if __name__ == '__main__':
     while True:
-        date_today = dt.datetime.now().date()
-        if date_today in REGULAR_BUSINESS_DAYS:
-            business_day_index = REGULAR_BUSINESS_DAYS.index(date_today)
+        date_today = dt.date.today()
+        if 1 <= date_today.month < 12 and BUSINESS_DAYS_UPDATED:
+            BUSINESS_DAYS_UPDATED = False
+        if date_today.month == 12 and date_today.day > 25 and not BUSINESS_DAYS_UPDATED:
+            update_business_days_array()
+        
+        if date_today in FULL_BUSINESS_DAYS:
+            business_day_index = FULL_BUSINESS_DAYS.index(date_today)
             if dt.datetime.now().hour >= 14 and job_last_ran != date_today:
                 premarket_top_gainers_job()
                 daily_top_gainers_job()
-                job_last_ran = dt.datetime.now().date()
-                print("Finished all jobs of today!")
-
-        time.sleep(ONE_DAY_IN_SECS)
+                update_big_names_data()
+                job_last_ran = dt.date.today()
+                print(f"{date_today}: Finished all jobs of today!")
+        
+        print(f"{dt.datetime.now()}: Sleeping...")
+        time.sleep(THREE_HOURS_IN_SECS)
