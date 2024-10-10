@@ -29,6 +29,17 @@ else:
 
 job_last_ran = dt.datetime.today().date() - dt.timedelta(days=2)
 
+def next_nine_pm():
+    now = dt.datetime.now()
+    next_time = now.replace(hour=21, minute=1, second=0, microsecond=0)
+    
+    # Check if 9:01 PM has already passed today
+    if now > next_time:
+        # If passed, return 9:01 PM the next day
+        next_time += dt.timedelta(days=1)
+    
+    return next_time
+
 # What happens to premarket gainers during the day?
 def premarket_top_gainers_job():
     global date_today, business_day_index
@@ -139,5 +150,6 @@ if __name__ == '__main__':
                 job_last_ran = dt.date.today()
                 print(f"{date_today}: Finished all jobs of today!")
         
-        print(f"{dt.datetime.now()}: Sleeping...")
-        time.sleep(ONE_HOUR_IN_SECS)
+        nap_time = (next_nine_pm() - dt.datetime.now())
+        print(f"{dt.datetime.now()}: Sleeping for {nap_time}...")
+        time.sleep(nap_time.seconds)

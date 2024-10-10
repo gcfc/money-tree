@@ -119,18 +119,22 @@ def download_from_yf(ticker, interval, start: Union[dt.date, None], end: Union[d
 
     # Download and clean
     data = yf.download(ticker, interval=interval, start=start, end=end, prepost=True, progress=False)
-    if len(data) == 0:
-        raise RuntimeError("Empty YF query!")
     
     data = data.drop(['Adj Close'], axis=1)
+    data = data.rename_axis("Datetime").reset_index()
+    
+    if len(data) == 0:
+        print("WARNING: Empty YF query!")
+        return data
+    
     try:
-        data.index = list(map(lambda x: dt.datetime.strptime(str(x).replace(":",""), '%Y-%m-%d %H%M%S%z').replace(tzinfo=None), data.index))
+        data.Datetime = list(map(lambda x: dt.datetime.strptime(str(x).replace(":",""), '%Y-%m-%d %H%M%S%z').replace(tzinfo=None), data.Datetime))
     except:
         try:
-            data.index = list(map(lambda x: dt.datetime.strptime(str(x).replace(":",""), '%Y-%m-%d %H%M%S').replace(tzinfo=None), data.index))
+            data.Datetime = list(map(lambda x: dt.datetime.strptime(str(x).replace(":",""), '%Y-%m-%d %H%M%S').replace(tzinfo=None), data.Datetime))
         except Exception as e:
             raise ValueError(e)
-    data = data.rename_axis("Datetime").reset_index()
+
     return data
 
 def download_from_polygon(ticker, interval, start: Union[dt.date, None], end: Union[dt.date, None]):
