@@ -16,6 +16,7 @@ BEGINNING_OF_TIME = dt.date(1960, 1, 1)
 BASE_DIR = os.path.join(os.environ["BASE_DIR"])
 
 VALID_INTERVALS = {"1m","2m","5m","15m","30m","1h","4h","1d"} # "60m","90m","5d","1wk","1mo","3mo"
+# NOTE: "4h" is more useful for forex & crypto. Download the data for now, but note that candle starts at 8am instead of 9:30am. 
 
 INTERVALS_TO_PD_OFFSET = {
     "1m": '1min',
@@ -23,8 +24,8 @@ INTERVALS_TO_PD_OFFSET = {
     "5m": '5min',
     "15m": '15min',
     "30m": '30min',
-    "1h": '1H',
-    "4h": '4H',
+    "1h": '1h',
+    "4h": '4h',
     "1d": '1D'
 }
 MARKET_OPEN = pd.to_datetime('09:30:00').time()
@@ -73,8 +74,9 @@ def is_continuous(datetime_series, interval:str) -> bool:
         if interval == '4h':
             day_start = pd.Timestamp(date).normalize() + pd.Timedelta(hours=4)
         else:
-            # TODO: should the 1h chart start with 9 or 9:30am each day? 
-            day_start = pd.Timestamp(date).normalize() + pd.Timedelta(hours=9)# , minutes=30)
+            # All stock charts should have candlestick that starts at 9:30am each day
+            # TODO: Forex may have different timestamps. Modify this if I ever touch Forex. Maybe pass in the ticker symbol and check if it ends with "=X". If so day_start and day_end are just the .normalize() 1 day apart (i.e. all day long on the hour). 
+            day_start = pd.Timestamp(date).normalize() + pd.Timedelta(hours=9, minutes=30)
         day_end = pd.Timestamp(date).normalize() + pd.Timedelta(hours=16)
         day_times = pd.date_range(start=day_start, end=day_end, freq=INTERVALS_TO_PD_OFFSET[interval])
         expected_times.append(day_times)
@@ -197,38 +199,53 @@ def get_historical_data(ticker:str,
     if end is None: 
         end = dt.date.today()
 
-    # Check existing data and either 1. modify start and end or 2. don't download at all.    
-    df = read_pickle(pickle_filepath(ticker, interval))
-    if df is not None: # If pickle exists     
-        filtered_df = df[(df['Datetime'].dt.date >= start) & (df['Datetime'].dt.date <= end)]
-        if len(filtered_df) > 0:
-            is_df_continuous, missing_times = is_continuous(filtered_df['Datetime'], interval)
-            if is_df_continuous:
-                return filtered_df
-            start = pd.Timestamp(missing_times[0]).to_pydatetime().date()
+    # Check existing data and either 1. modify start and end or 2. don't download at all. 
+    if save_to_pickle:
+        df = read_pickle(pickle_filepath(ticker, interval))
+        if df is not None: # If pickle exists     
+            filtered_df = df[(df['Datetime'].dt.date >= start) & (df['Datetime'].dt.date <= end)]
+            if len(filtered_df) > 0:
+                is_df_continuous, missing_times = is_continuous(filtered_df['Datetime'], interval)
+                if is_df_continuous:
+                    return filtered_df
+                start = pd.Timestamp(missing_times[0]).to_pydatetime().date()
     
     print(f"Downloading:\t{ticker}\t{interval}\t{start}\t{end}")
     new_data = None
     if interval == "1d":
         new_data = download_from_yf(ticker, interval, start, end)
-    elif interval in {"4h", "1h"}:
+    elif interval == "4h":
         new_data = download_from_polygon(ticker, interval, start, end)
     else:
         # Fuse the two together. During pre- and post- market hours, yfinance has better time granularity but no volume data, whereas Polygon has sparse timestamps each with volume data. 
-        
+
         new_data_yf = download_from_yf(ticker, interval, start, end)
         new_data_polygon = download_from_polygon(ticker, interval, start, end)
         
-        # pre_post_data = new_data_yf.loc[(new_data_yf['Datetime'].dt.time <= MARKET_OPEN) | (new_data_yf['Datetime'].dt.time >= MARKET_CLOSE)]
-        
-        # Fill in finer-grain timestamps from YF. Polygon data takes precedence, hence the order in the list.
-        new_data = pd.concat([new_data_polygon, new_data_yf], axis=0)
-        new_data = new_data.drop_duplicates("Datetime").sort_values(by="Datetime")
-        # Stitched data kinda makes sense as an appoximation of pre- and post- market blips with volume readings. Polygon and yfinance have almost the exact timestamps so it doesn't quite matter for a prototype. 
+        if interval == '1h': 
+            # Keep YF's timestamps which are on the hour pre- and post- market, and on 30th minutes during market hours. Fill in only the pre- and post- market volume from Polygon. This ensures a separate candlestick when market opens at 9:30am. 
+            
+            polygon_pre_post_data = new_data_polygon.loc[(new_data_polygon['Datetime'].dt.time <= MARKET_OPEN) | (new_data_polygon['Datetime'].dt.time >= MARKET_CLOSE)]
 
-    if not save_to_pickle:
-        return new_data
-    else:
+            # fill in volume here and produce new_data
+            # Lookup by exact value. Polygon and yfinance have almost the exact timestamps so it doesn't quite matter for a prototype. 
+            # Low-prio TODO: make it better
+        
+            # Populate pre- post- market volume from Polygon
+            for _, row in polygon_pre_post_data.iterrows():
+                yf_row = new_data_yf[new_data_yf['Datetime'] == row.Datetime]
+                assert len(yf_row) <= 1, "Multiple of the same timestamps found."
+                new_data_yf.loc[yf_row.index, 'Volume'] = row.Volume
+
+            new_data = new_data_yf
+        
+        else:
+            # Stitched data kinda makes sense as an appoximation of pre- and post- market blips with volume readings. Polygon and yfinance have almost the exact timestamps so it doesn't quite matter for a prototype. 
+            # Fill in finer-grain timestamps from YF. Polygon data takes precedence, hence the order in the list.
+            new_data = pd.concat([new_data_polygon, new_data_yf], axis=0)
+            new_data = new_data.drop_duplicates("Datetime").sort_values(by="Datetime")
+
+    if save_to_pickle:
         if df is None: # If pickle doesn't exist        
             df = pd.DataFrame(columns=["Datetime", 'Open', 'High', 'Low', 'Close', 'Volume'])
 
@@ -237,7 +254,8 @@ def get_historical_data(ticker:str,
         if not os.path.exists(target_file):
             open(target_file, "x")
         df.to_pickle(target_file)
-        return df
+    
+    return new_data
 
 def update_big_names_data():
     for interval in VALID_INTERVALS:
