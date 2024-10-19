@@ -17,7 +17,7 @@ from math import pi
 from bokeh.plotting import figure, show
 from bokeh.transform import factor_cmap
 
-from utils import *
+from class_definitions import *
 
 def add_crosshair_labels(plot, renderer):
     # https://github.com/bokeh/bokeh/issues/3000#issuecomment-2028617843

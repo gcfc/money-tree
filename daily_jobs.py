@@ -78,7 +78,7 @@ def premarket_top_gainers_job():
     # Download 1m, 5m, 15m, 30m, 1h of all
     for ticker in tqdm(df.name.to_list()):
         for interval in ["1m", "5m", "15m", "30m", "1h"]:
-            get_historical_data(ticker, interval, date_today, date_today)
+            download_and_save(ticker, interval, date_today, date_today)
     print(f"{date_today}: Premarket top gainers download complete!")
 
 # What happens to daily top gainers in a few days?
@@ -124,13 +124,13 @@ def daily_top_gainers_job():
     # Download 1m, 5m, 15m, 30m, 1h, 4h, 1d of all
     for ticker in tqdm(stocks_to_download):
         for interval in ["1m", "5m", "15m", "30m", "1h", "4h", "1d"]:
-            get_historical_data(ticker, interval, date_today, date_today)
+            download_and_save(ticker, interval, date_today, date_today)
     print(f"{date_today}: Daily top gainers download complete!")
 
 if __name__ == '__main__':
     
     test_mode = False
-    test_date = dt.date(2024, 9, 10)
+    test_date = most_recent_business_day()
     
     while True:
         date_today = dt.date.today() if not test_mode else test_date
