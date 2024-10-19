@@ -1,22 +1,13 @@
-import os
-import datetime as dt
-import pandas as pd
 import numpy as np
 import yfinance as yf
-from pandas.tseries.offsets import BDay
+from utils import *
 from typing import *
 import requests
 import time
 from bisect import bisect_left
 import pandas_market_calendars as mcal
-from dotenv import load_dotenv
-load_dotenv()
 
 BEGINNING_OF_TIME = dt.date(1960, 1, 1)
-BASE_DIR = os.path.join(os.environ["BASE_DIR"])
-
-VALID_INTERVALS = {"1m","2m","5m","15m","30m","1h","4h","1d"} # "60m","90m","5d","1wk","1mo","3mo"
-# NOTE: "4h" is more useful for forex & crypto. Download the data for now, but note that candle starts at 8am instead of 9:30am. 
 
 INTERVALS_TO_PD_OFFSET = {
     "1m": '1min',
@@ -62,49 +53,62 @@ def _validate_args(ticker, interval, start, end):
     if end is not None:
         assert type(end) == dt.date, f"Invalid end date, must be type datetime.date"
 
-def is_continuous(datetime_series, interval:str) -> bool: 
+def is_strictly_continuous(datetime_series, interval:str) -> tuple: 
+    # Must match all days and every timestamp
+    if len(datetime_series) == 0:
+        return True, []
     expected_times = []
+    start = datetime_series.min().normalize()  
+    end = datetime_series.max().normalize()
+    market_schedule = mcal.get_calendar('NYSE').schedule(start_date=start, end_date=end)
+    business_days_list = market_schedule.loc[market_schedule['market_close'].dt.time >= pd.to_datetime('20:00:00').time()].index.to_list()
+    for date in business_days_list:
+        if interval == '1d':
+            expected_times.append(pd.date_range(start=pd.Timestamp(date).normalize(), end=pd.Timestamp(date).normalize(), freq=INTERVALS_TO_PD_OFFSET[interval]))
+
+        else:
+            # All stock charts should have candlestick that starts at 9:30am each day
+            # TODO: Forex may have different timestamps. Modify this if I ever touch Forex. Maybe pass in the ticker symbol and check if it ends with "=X". If so day_start and day_end are just the .normalize() 1 day apart (i.e. all day long on the hour). 
+            day_start = pd.Timestamp(date).normalize() + pd.Timedelta(hours=9, minutes=30)
+            if interval == '4h':
+                day_start = pd.Timestamp(date).normalize() + pd.Timedelta(hours=4)
+            day_end = pd.Timestamp(date).normalize() + pd.Timedelta(hours=16)
+            day_times = pd.date_range(start=day_start, end=day_end, freq=INTERVALS_TO_PD_OFFSET[interval])
+            expected_times.append(day_times)
+
+    missing_times = np.setdiff1d(expected_times, datetime_series)
+
+    return (len(missing_times) == 0), missing_times
+
+def is_loosely_continuous(datetime_series, interval:str) -> tuple:
+    # as long as the 9:30am candle is downloaded that day, assume the whole day is downloaded
+    if len(datetime_series) == 0:
+        return True, []
     start = datetime_series.min().normalize()  
     end = datetime_series.max().normalize()
     market_schedule = mcal.get_calendar('NYSE').schedule(start_date=start, end_date=end)
     business_days_list = market_schedule.loc[market_schedule['market_close'].dt.time >= pd.to_datetime('20:00:00').time()].index.to_list()
     if interval == '1d':
         expected_times = pd.date_range(start=start, end=end)
-    for date in business_days_list:
-        if interval == '4h':
-            day_start = pd.Timestamp(date).normalize() + pd.Timedelta(hours=4)
-        else:
-            # All stock charts should have candlestick that starts at 9:30am each day
-            # TODO: Forex may have different timestamps. Modify this if I ever touch Forex. Maybe pass in the ticker symbol and check if it ends with "=X". If so day_start and day_end are just the .normalize() 1 day apart (i.e. all day long on the hour). 
-            day_start = pd.Timestamp(date).normalize() + pd.Timedelta(hours=9, minutes=30)
-        day_end = pd.Timestamp(date).normalize() + pd.Timedelta(hours=16)
-        day_times = pd.date_range(start=day_start, end=day_end, freq=INTERVALS_TO_PD_OFFSET[interval])
-        expected_times.append(day_times)
+        missing_times = np.setdiff1d(expected_times, datetime_series)
+        return (len(missing_times) == 0), missing_times
+    everyday_930 = [day.replace(hour=9, minute=30) for day in business_days_list]
+    missing_days = [bd not in datetime_series.values for bd in everyday_930]
+    return (len(missing_days) == 0), missing_days
 
-    missing_times = np.setdiff1d(expected_times, datetime_series)
-
-    return (len(missing_times) == 0), missing_times
-
-def read_pickle(pickle_filepath):
-    if os.path.exists(pickle_filepath):
-        return pd.read_pickle(pickle_filepath)
-    else:
-        return None
-
-def pickle_filepath(ticker, interval):
-    return os.path.join(BASE_DIR, "data", f"{ticker.upper()}_{interval.lower()}.pkl")
 
 def most_recent_business_day(query_date = dt.date.today()):
     ind = bisect_left(FULL_BUSINESS_DAYS, query_date)
     return query_date if (query_date == FULL_BUSINESS_DAYS[ind]) else FULL_BUSINESS_DAYS[ind-1]
 
-def download_from_yf(ticker, interval, start: Union[dt.date, None], end: Union[dt.date, None]):
+def download_from_yf(ticker, interval, start: dt.date, end: dt.date):
     '''
     This function is expected to be called with all arguments defined, no arguments should equal to None.
     Downloads data from yfinance and returns a cleaned-up pandas DataFrame.  
     '''
     # Modify start and end to valid range
     # TODO: extract this section from two functions and merge into its own function? 
+    # TODO: allow returning None when queried dates are past range, allow returning partial data when queried dates are partially in range, change function name to download_from_yf_or_none
     max_days_yf = MAX_DAYS_DICT_YF.get(interval, np.inf)
 
     if max_days_yf != np.inf:
@@ -139,13 +143,14 @@ def download_from_yf(ticker, interval, start: Union[dt.date, None], end: Union[d
 
     return data
 
-def download_from_polygon(ticker, interval, start: Union[dt.date, None], end: Union[dt.date, None]):
+def download_from_polygon(ticker, interval, start: dt.date, end: dt.date):
     '''
     This function is expected to be called with all arguments defined, no arguments should equal to None.
     Downloads data from polygon and returns a cleaned-up pandas DataFrame.  
     '''
     # Modify start and end to valid range
     # TODO: extract this section from two functions and merge into its own function? 
+    # TODO: allow returning None when queried dates are past range, allow returning partial data when queried dates are partially in range, change function name to download_from_polygon_or_none
     max_days_polygon = MAX_DAYS_DICT_POLYGON.get(interval, np.inf)
 
     if max_days_polygon != np.inf:
@@ -183,11 +188,11 @@ def download_from_polygon(ticker, interval, start: Union[dt.date, None], end: Un
     total_df = total_df.drop(['vw', 'n'], axis=1)
     return total_df
 
-def get_historical_data(ticker:str, 
-                        interval:str, 
-                        start:Union[dt.date, None] = None, 
-                        end:Union[dt.date, None] = None,
-                        save_to_pickle = True):
+def download_and_save(ticker:str, 
+                    interval:str, 
+                    start:Union[dt.date, None] = None, 
+                    end:Union[dt.date, None] = None,
+                    save_to_pickle = True):
     '''
     The public interface to get historical data from any time at any intervals.
     This function fuses together many sources to produce a cleaned-up pandas DataFrame 
@@ -200,15 +205,14 @@ def get_historical_data(ticker:str,
         end = dt.date.today()
 
     # Check existing data and either 1. modify start and end or 2. don't download at all. 
+    # TODO: save_to_pickle can be False and can still access and return existing data, just don't modify existing data
     if save_to_pickle:
-        df = read_pickle(pickle_filepath(ticker, interval))
-        if df is not None: # If pickle exists     
-            filtered_df = df[(df['Datetime'].dt.date >= start) & (df['Datetime'].dt.date <= end)]
-            if len(filtered_df) > 0:
-                is_df_continuous, missing_times = is_continuous(filtered_df['Datetime'], interval)
-                if is_df_continuous:
-                    return filtered_df
-                start = pd.Timestamp(missing_times[0]).to_pydatetime().date()
+        df = get_downloaded_data_or_none(ticker, interval, start, end)
+        if df is not None and len(df) > 0: # If data is already downloaded     
+            is_df_continuous, missing_times = is_strictly_continuous(df['Datetime'], interval)
+            if is_df_continuous:
+                return df
+            start = pd.Timestamp(missing_times[0]).to_pydatetime().date()
     
     print(f"Downloading:\t{ticker}\t{interval}\t{start}\t{end}")
     new_data = None
@@ -226,7 +230,6 @@ def get_historical_data(ticker:str,
             # Keep YF's timestamps which are on the hour pre- and post- market, and on 30th minutes during market hours. Fill in only the pre- and post- market volume from Polygon. This ensures a separate candlestick when market opens at 9:30am. 
             
             polygon_pre_post_data = new_data_polygon.loc[(new_data_polygon['Datetime'].dt.time <= MARKET_OPEN) | (new_data_polygon['Datetime'].dt.time >= MARKET_CLOSE)]
-
             # fill in volume here and produce new_data
             # Lookup by exact value. Polygon and yfinance have almost the exact timestamps so it doesn't quite matter for a prototype. 
             # Low-prio TODO: make it better
@@ -260,4 +263,4 @@ def get_historical_data(ticker:str,
 def update_big_names_data():
     for interval in VALID_INTERVALS:
         for ticker in {"QQQ", "SPY", "VOO", "NVDA", "MSFT"}:
-            get_historical_data(ticker, interval)
+            download_and_save(ticker, interval, end=dt.date.today()-dt.timedelta(days=1))

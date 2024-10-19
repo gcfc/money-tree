@@ -1,7 +1,7 @@
 from download import * 
 from visualize import * 
 import pandas as pd
-from utils import *
+from class_definitions import *
 from typing import * 
 
 def SMA(values, n):
@@ -19,9 +19,6 @@ def RSI(array, n):
     loss[loss > 0] = 0
     rs = gain.ewm(n).mean() / loss.abs().ewm(n).mean()
     return 100 - 100 / (1 + rs)
-
-class OutOfMoneyError(Exception):
-    pass
 
 class SmaCross(Strategy):   
     def __init__(self, data, broker) -> None:
@@ -45,7 +42,7 @@ class SmaCross(Strategy):
 
         super().next()
 
-data = get_historical_data("NIO", "1m")
+data = download_and_save("NIO", "1m")
 broker = Broker(data, verbose=True)
 strategy = SmaCross(data, broker)
 
