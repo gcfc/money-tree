@@ -24,10 +24,10 @@ MARKET_CLOSE = pd.to_datetime('16:00:00').time()
 
 # Interval string to number of days
 MAX_DAYS_DICT_YF = {"1m": 7, 
-                    "2m": 7,
-                    "5m": 7,
-                    "15m": 7,
-                    "30m": 7,
+                    "2m": 60,
+                    "5m": 60,
+                    "15m": 60,
+                    "30m": 60,
                     "1h": 730}
 MAX_DAYS_DICT_POLYGON = {interval : 730 for interval in VALID_INTERVALS}
 
@@ -48,10 +48,26 @@ update_business_days_array()
 
 def _validate_args(ticker, interval, start, end):
     assert interval in VALID_INTERVALS, f"Invalid interval: {interval}. Supported intervals: {VALID_INTERVALS}"
-    if start is not None:
-        assert type(start) == dt.date, f"Invalid start date, must be type datetime.date"
-    if end is not None:
-        assert type(end) == dt.date, f"Invalid end date, must be type datetime.date"
+    assert type(start) == dt.date, f"Invalid start date, must be type datetime.date"
+    assert type(end) == dt.date, f"Invalid end date, must be type datetime.date"
+
+def modify_start_end_by_downloader(interval, start, end):
+    assert start is not None, "Start date not specified to modify!"
+    assert end is not None, "End date not specified to modify!"
+    output = {"yf": (None, None), "polygon": (None, None)}
+    max_days_yf = MAX_DAYS_DICT_YF.get(interval, np.inf)
+    max_days_polygon = MAX_DAYS_DICT_POLYGON.get(interval, np.inf)
+    
+    yf_start = max(start, dt.date.today() - dt.timedelta(days=max_days_yf+1))
+    if not (yf_start > end):
+        output["yf"] = (yf_start, end)
+
+    polygon_start = max(start, dt.date.today() - dt.timedelta(days=max_days_polygon))
+    if not (polygon_start > end):
+        output["polygon"] = (polygon_start, end)
+
+    assert type(output) == dict and len(output) == 2 and all(len(val) == 2 for val in output.values()) 
+    return output
 
 def is_strictly_continuous(datetime_series, interval:str) -> tuple: 
     # Must match all days and every timestamp
@@ -100,26 +116,17 @@ def most_recent_business_day(query_date = dt.date.today()):
     ind = bisect_left(FULL_BUSINESS_DAYS, query_date)
     return query_date if (query_date == FULL_BUSINESS_DAYS[ind]) else FULL_BUSINESS_DAYS[ind-1]
 
-def download_from_yf(ticker, interval, start: dt.date, end: dt.date):
+def download_from_yf(ticker, interval, start: Union[dt.date,None], end: Union[dt.date,None]):
     '''
-    This function is expected to be called with all arguments defined, no arguments should equal to None.
+    This function is expected to be called with either valid arguments defined, or both start and end equal to None. 
     Downloads data from yfinance and returns a cleaned-up pandas DataFrame.  
+    If error, return empty pandas DataFrame with correct column titles.
     '''
-    # Modify start and end to valid range
-    # TODO: extract this section from two functions and merge into its own function? 
-    # TODO: allow returning None when queried dates are past range, allow returning partial data when queried dates are partially in range, change function name to download_from_yf_or_none
-    # example: Running this on Oct 20. For 5m charts, older times are actually allowed in polygon up to 730 days but in YF it's 7 days. Oct 3 - Oct 14 won't throw errors but Oct 3 - Oct 10 would. They both should return decent data since Polygon's power. 
-    # So once given a start and end in download_and_save, modify params and distribute the job among the two functions. 
-    max_days_yf = MAX_DAYS_DICT_YF.get(interval, np.inf)
 
-    if max_days_yf != np.inf:
-        start = max(start, dt.date.today() - dt.timedelta(days=max_days_yf-1))
-    
-    if (dt.date.today() - end).days > max_days_yf:
-        raise ValueError(f"Cannot query {interval} data greater than {max_days_yf} days!")
-
-    # At this point start and end date must be specified (i.e. not None)
-    assert end >= start, f"Start date ({start}) must be earlier than end date ({end})!"
+    data = pd.DataFrame(columns=["Datetime", 'Open', 'High', 'Low', 'Close', 'Volume'])
+    if start is None and end is None:
+        return data
+    _validate_args(ticker, interval, start, end)
     
     # For YF, the end date is not inclusive but I'd like to design my API to be inclusive of start and end dates (consistent with Polygon). i.e. to download one day of data, you'd call download_from_yf(ticker, interval, start=<same_date>, end=<same_date>).
     end = dt.date(end.year, end.month, end.day) + dt.timedelta(days=1)
@@ -144,30 +151,20 @@ def download_from_yf(ticker, interval, start: dt.date, end: dt.date):
 
     return data
 
-def download_from_polygon(ticker, interval, start: dt.date, end: dt.date):
+def download_from_polygon(ticker, interval, start: Union[dt.date,None], end: Union[dt.date,None]):
     '''
-    This function is expected to be called with all arguments defined, no arguments should equal to None.
-    Downloads data from polygon and returns a cleaned-up pandas DataFrame.  
+    This function is expected to be called with either valid arguments defined, or both start and end equal to None. 
+    Downloads data from polygon and returns a cleaned-up pandas DataFrame. 
+    If error, return empty pandas DataFrame with correct column titles.
     '''
-    # Modify start and end to valid range
-    # TODO: extract this section from two functions and merge into its own function? 
-    # TODO: allow returning None when queried dates are past range, allow returning partial data when queried dates are partially in range, change function name to download_from_polygon_or_none
-    max_days_polygon = MAX_DAYS_DICT_POLYGON.get(interval, np.inf)
-
-    if max_days_polygon != np.inf:
-        start = max(start, dt.date.today() - dt.timedelta(days=max_days_polygon-1))
+    total_df = pd.DataFrame(columns=["Datetime", 'Open', 'High', 'Low', 'Close', 'Volume'])  
+    if start is None and end is None:
+        return total_df
+    _validate_args(ticker, interval, start, end)
     
-    if (dt.date.today() - end).days > max_days_polygon:
-        raise ValueError(f"Cannot query {interval} data greater than {max_days_polygon} days!")
-
-    # At this point start and end date must be specified (i.e. not None)
-    assert end >= start, f"Start date ({start}) must be earlier than end date ({end})!"
-    
-    # Download and clean
     interval_abbrev_dict = {"m": "minute", "h": "hour", "d": "day"}
     interval_arg = interval[:-1] + "/" + interval_abbrev_dict[interval[-1]]
-    
-    total_df = None  
+
     count = np.inf
 
     while count >= 50000: # Polygon limit number of candlesticks per query
@@ -185,7 +182,7 @@ def download_from_polygon(ticker, interval, start: dt.date, end: dt.date):
         count = r.json()['count']
         time.sleep(12.25) # Obey limit of 5 API calls per minute
         
-    total_df = total_df.rename(columns={"t":"Datetime", "o": "Open", "h":"High", "l":"Low",  "c": "Close", "v": "Volume"})
+    total_df = total_df.rename(columns={"t":"Datetime", "o":"Open", "h":"High", "l":"Low", "c": "Close", "v":"Volume"})
     total_df = total_df.drop(['vw', 'n'], axis=1)
     return total_df
 
@@ -193,61 +190,75 @@ def download_and_save(ticker:str,
                     interval:str, 
                     start:Union[dt.date, None] = None, 
                     end:Union[dt.date, None] = None,
-                    save_to_pickle = True):
+                    save_to_pickle = True,
+                    allow_low_quality = False):
     '''
     The public interface to get historical data from any time at any intervals.
     This function fuses together many sources to produce a cleaned-up pandas DataFrame 
     with all the data.
+    start = None means download from beginning of time
+    end = None means download until and including today
     '''
-    _validate_args(ticker, interval, start, end)
     if start is None: 
         start = BEGINNING_OF_TIME
     if end is None: 
         end = dt.date.today()
+    _validate_args(ticker, interval, start, end)
 
     # Check existing data and either 1. modify start and end or 2. don't download at all. 
     # TODO: save_to_pickle can be False and can still access and return existing data, just don't modify existing data
     if save_to_pickle:
         df = get_downloaded_data_or_none(ticker, interval, start, end)
-        if df is not None and len(df) > 0: # If data is already downloaded     
-            is_df_continuous, missing_times = is_strictly_continuous(df['Datetime'], interval)
+        if df is not None and len(df) > 0: # If data is already downloaded
+            is_df_continuous, missing_times = is_loosely_continuous(df['Datetime'], interval)
             if is_df_continuous:
                 return df
             start = pd.Timestamp(missing_times[0]).to_pydatetime().date()
     
     print(f"Downloading:\t{ticker}\t{interval}\t{start}\t{end}")
     new_data = None
+    modified_starts_and_ends = modify_start_end_by_downloader(interval, start, end)
     if interval == "1d":
-        new_data = download_from_yf(ticker, interval, start, end)
+        new_data = download_from_yf(ticker, interval, *modified_starts_and_ends["yf"])
     elif interval == "4h":
-        new_data = download_from_polygon(ticker, interval, start, end)
+        new_data = download_from_polygon(ticker, interval, *modified_starts_and_ends["polygon"])
     else:
         # Fuse the two together. During pre- and post- market hours, yfinance has better time granularity but no volume data, whereas Polygon has sparse timestamps each with volume data. 
 
-        new_data_yf = download_from_yf(ticker, interval, start, end)
-        new_data_polygon = download_from_polygon(ticker, interval, start, end)
+        new_data_yf = download_from_yf(ticker, interval, *modified_starts_and_ends["yf"])
+        new_data_polygon = download_from_polygon(ticker, interval, *modified_starts_and_ends["polygon"])
         
-        if interval == '1h': 
-            # Keep YF's timestamps which are on the hour pre- and post- market, and on 30th minutes during market hours. Fill in only the pre- and post- market volume from Polygon. This ensures a separate candlestick when market opens at 9:30am. 
+        if (len(new_data_yf) == 0 and len(new_data_polygon) == 0):
+            new_data = pd.DataFrame(columns=["Datetime", 'Open', 'High', 'Low', 'Close', 'Volume'])
+        
+        elif (len(new_data_yf) > 0 and len(new_data_polygon) > 0):
+            if interval == '1h': 
+                # Keep YF's timestamps which are on the hour pre- and post- market, and on 30th minutes during market hours. Fill in only the pre- and post- market volume from Polygon. This ensures a separate candlestick when market opens at 9:30am. 
+                
+                polygon_pre_post_data = new_data_polygon.loc[(new_data_polygon['Datetime'].dt.time <= MARKET_OPEN) | (new_data_polygon['Datetime'].dt.time >= MARKET_CLOSE)]
+                # fill in volume here and produce new_data
+                # Lookup by exact value. Polygon and yfinance have almost the exact timestamps so it doesn't quite matter for a prototype. 
+                # Low-prio TODO: make it better
             
-            polygon_pre_post_data = new_data_polygon.loc[(new_data_polygon['Datetime'].dt.time <= MARKET_OPEN) | (new_data_polygon['Datetime'].dt.time >= MARKET_CLOSE)]
-            # fill in volume here and produce new_data
-            # Lookup by exact value. Polygon and yfinance have almost the exact timestamps so it doesn't quite matter for a prototype. 
-            # Low-prio TODO: make it better
-        
-            # Populate pre- post- market volume from Polygon
-            for _, row in polygon_pre_post_data.iterrows():
-                yf_row = new_data_yf[new_data_yf['Datetime'] == row.Datetime]
-                assert len(yf_row) <= 1, "Multiple of the same timestamps found."
-                new_data_yf.loc[yf_row.index, 'Volume'] = row.Volume
+                # Populate pre- post- market volume from Polygon
+                for _, row in polygon_pre_post_data.iterrows():
+                    yf_row = new_data_yf[new_data_yf['Datetime'] == row.Datetime]
+                    assert len(yf_row) <= 1, "Multiple of the same timestamps found."
+                    new_data_yf.loc[yf_row.index, 'Volume'] = row.Volume
 
-            new_data = new_data_yf
-        
-        else:
-            # Stitched data kinda makes sense as an appoximation of pre- and post- market blips with volume readings. Polygon and yfinance have almost the exact timestamps so it doesn't quite matter for a prototype. 
-            # Fill in finer-grain timestamps from YF. Polygon data takes precedence, hence the order in the list.
-            new_data = pd.concat([new_data_polygon, new_data_yf], axis=0)
-            new_data = new_data.drop_duplicates("Datetime").sort_values(by="Datetime")
+                new_data = new_data_yf
+            
+            else:
+                # Stitched data kinda makes sense as an appoximation of pre- and post- market blips with volume readings. Polygon and yfinance have almost the exact timestamps so it doesn't quite matter for a prototype. 
+                # Fill in finer-grain timestamps from YF. Polygon data takes precedence, hence the order in the list.
+                new_data = pd.concat([new_data_polygon, new_data_yf], axis=0)
+                new_data = new_data.drop_duplicates("Datetime").sort_values(by="Datetime")
+                
+        elif allow_low_quality:
+            if len(new_data_polygon) > 0:
+                new_data = new_data_polygon
+            elif len(new_data_yf) > 0:
+                new_data = new_data_yf           
 
     if save_to_pickle:
         if df is None: # If pickle doesn't exist        
