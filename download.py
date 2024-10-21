@@ -209,8 +209,8 @@ def download_and_save(ticker:str,
     # TODO: save_to_pickle can be False and can still access and return existing data, just don't modify existing data
     if save_to_pickle:
         df = get_downloaded_data_or_none(ticker, interval, start, end)
-        if df is not None and len(df) > 0: # If data is already downloaded     
-            is_df_continuous, missing_times = is_strictly_continuous(df['Datetime'], interval)
+        if df is not None and len(df) > 0: # If data is already downloaded
+            is_df_continuous, missing_times = is_loosely_continuous(df['Datetime'], interval)
             if is_df_continuous:
                 return df
             start = pd.Timestamp(missing_times[0]).to_pydatetime().date()

@@ -40,6 +40,10 @@ def next_nine_pm():
     
     return next_time
 
+###################
+# JOB DEFINITIONS #
+###################
+
 # What happens to premarket gainers during the day?
 def premarket_top_gainers_job():
     global date_today, business_day_index
