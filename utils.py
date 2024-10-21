@@ -23,10 +23,10 @@ def get_downloaded_data_or_none(ticker, interval, start=None, end=None):
     if df is not None and len(df) > 0:
         if start is not None and end is not None:
             return df[(df['Datetime'].dt.date >= start) & (df['Datetime'].dt.date <= end)]
-        elif start is None:
-            return df[(df['Datetime'].dt.date <= end)]
-        elif end is None:
+        elif start is not None:
             return df[(df['Datetime'].dt.date >= start)]
+        elif end is not None:
+            return df[(df['Datetime'].dt.date <= end)]
         else:
             return df
     return None
