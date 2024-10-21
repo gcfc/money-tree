@@ -1,6 +1,7 @@
 import os 
 import pandas as pd
 import datetime as dt
+import numpy as np
 from dotenv import load_dotenv
 load_dotenv()
 
