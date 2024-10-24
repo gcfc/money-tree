@@ -1,4 +1,3 @@
-import numpy as np
 import yfinance as yf
 from utils import *
 from typing import *
