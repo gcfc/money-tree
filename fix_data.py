@@ -1,5 +1,3 @@
-import pickle
-import os
 from download import *
 from tqdm import tqdm
 
