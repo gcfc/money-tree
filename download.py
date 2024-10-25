@@ -156,9 +156,9 @@ def download_from_polygon(ticker, interval, start: Union[dt.date,None], end: Uni
     Downloads data from polygon and returns a cleaned-up pandas DataFrame. 
     If error, return empty pandas DataFrame with correct column titles.
     '''
-    total_df = pd.DataFrame(columns=["Datetime", 'Open', 'High', 'Low', 'Close', 'Volume'])  
+    total_df = None
     if start is None and end is None:
-        return total_df
+        return pd.DataFrame(columns=["Datetime", 'Open', 'High', 'Low', 'Close', 'Volume'])
     _validate_args(ticker, interval, start, end)
     
     interval_abbrev_dict = {"m": "minute", "h": "hour", "d": "day"}
@@ -214,7 +214,7 @@ def download_and_save(ticker:str,
                 return df
             start = pd.Timestamp(missing_times[0]).to_pydatetime().date()
     
-    print(f"Downloading:\t{ticker}\t{interval}\t{start}\t{end}")
+    print(f"Downloading:\t{ticker}\t{interval}\t{start}\t{end}", end=" ")
     new_data = None
     modified_starts_and_ends = modify_start_end_by_downloader(interval, start, end)
     if interval == "1d":
@@ -227,10 +227,7 @@ def download_and_save(ticker:str,
         new_data_yf = download_from_yf(ticker, interval, *modified_starts_and_ends["yf"])
         new_data_polygon = download_from_polygon(ticker, interval, *modified_starts_and_ends["polygon"])
         
-        if (len(new_data_yf) == 0 and len(new_data_polygon) == 0):
-            new_data = pd.DataFrame(columns=["Datetime", 'Open', 'High', 'Low', 'Close', 'Volume'])
-        
-        elif (len(new_data_yf) > 0 and len(new_data_polygon) > 0):
+        if (len(new_data_yf) > 0 and len(new_data_polygon) > 0):
             if interval == '1h': 
                 # Keep YF's timestamps which are on the hour pre- and post- market, and on 30th minutes during market hours. Fill in only the pre- and post- market volume from Polygon. This ensures a separate candlestick when market opens at 9:30am. 
                 
@@ -257,17 +254,22 @@ def download_and_save(ticker:str,
             if len(new_data_polygon) > 0:
                 new_data = new_data_polygon
             elif len(new_data_yf) > 0:
-                new_data = new_data_yf           
+                new_data = new_data_yf
+        
+        else:
+            print(f"WARNING: Empty dataframe requesting {ticker} {interval} data during {start} ~ {end}")
+            new_data = pd.DataFrame(columns=["Datetime", 'Open', 'High', 'Low', 'Close', 'Volume'])        
 
     if save_to_pickle:
         if df is None: # If pickle doesn't exist        
             df = pd.DataFrame(columns=["Datetime", 'Open', 'High', 'Low', 'Close', 'Volume'])
-
         df = df.merge(new_data, how="outer")
         target_file = pickle_filepath(ticker, interval)
         if not os.path.exists(target_file):
             open(target_file, "x")
         df.to_pickle(target_file)
+    if len(new_data) > 0:
+        print("Downloaded!")
     
     return new_data
 

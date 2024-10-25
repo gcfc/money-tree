@@ -26,7 +26,7 @@ for date, premarket_df in tqdm(PREMARKET_TOP_GAINERS.items()):
     tickers = premarket_df.name
     for ticker in tickers:
         for interval in premarket_intervals:
-            download_and_save(ticker, interval, date, date)
+            download_and_save(ticker, interval, date, date, allow_low_quality=True)
             # to_fix = False
             # if not os.path.exists(pickle_filepath(ticker, interval)):
             #     to_fix = True
@@ -44,4 +44,4 @@ for date, daily_df in tqdm(DAILY_TOP_GAINERS.items()):
             bday_idx = FULL_BUSINESS_DAYS.index(date)
             for idx in [bday_idx, bday_idx + 1, bday_idx + 2]:
                 if FULL_BUSINESS_DAYS[idx] < dt.date.today():
-                    download_and_save(ticker, interval, FULL_BUSINESS_DAYS[idx], FULL_BUSINESS_DAYS[idx])
+                    download_and_save(ticker, interval, FULL_BUSINESS_DAYS[idx], FULL_BUSINESS_DAYS[idx], allow_low_quality=True)
